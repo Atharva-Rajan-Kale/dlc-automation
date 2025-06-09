@@ -19,6 +19,11 @@ class Steps125Automation(BaseAutomation):
                 self.logger.info(f"Cloning from {self.fork_url}")
                 subprocess.run(["git", "clone", self.fork_url, "deep-learning-containers"], check=True)
             os.chdir("deep-learning-containers")
+            
+            # Verify we're in the right repository
+            result = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True)
+            self.logger.info(f"Working in repository: {result.stdout.strip()}")
+            
             try:
                 subprocess.run(["git", "remote", "get-url", "upstream"], capture_output=True, check=True)
                 self.logger.info("Upstream remote already exists")
@@ -47,16 +52,21 @@ class Steps125Automation(BaseAutomation):
     def step2_update_toml(self):
         """Step 2: Update toml file to build only AutoGluon"""
         self.logger.info("Step 2: Updating TOML configuration")
+        
+        # Ensure we're in the repo directory
         original_dir = os.getcwd()
         try:
             if not self.repo_dir.exists():
                 self.logger.error(f"Repository directory not found: {self.repo_dir}")
                 return False
+            
             os.chdir(self.repo_dir)
+            
             toml_path = Path("dlc_developer_config.toml")
             if not toml_path.exists():
                 self.logger.error(f"TOML file not found: {toml_path.absolute()}")
                 return False
+            
             with open(toml_path, 'r') as f:
                 content = f.read()
             content = re.sub(
@@ -95,10 +105,11 @@ class Steps125Automation(BaseAutomation):
     def step5_package_model(self):
         """Step 5: Update package_model.py version and execute it"""
         self.logger.info("Step 5: Packaging model")
-        main_project_dir = self.repo_dir.parent.parent
-        package_model_path = main_project_dir / "package_model.py"
-        self.logger.info(f"Repo dir: {self.repo_dir}")
-        self.logger.info(f"Looking for package_model.py in: {main_project_dir}")
+        
+        # package_model.py is now in the same directory as the automation scripts
+        package_model_path = self.main_project_dir / "package_model.py"
+        self.logger.info(f"Main project dir: {self.main_project_dir}")
+        self.logger.info(f"Looking for package_model.py in: {self.main_project_dir}")
         
         if not package_model_path.exists():
             self.logger.error(f"package_model.py not found at: {package_model_path}")
@@ -113,13 +124,15 @@ class Steps125Automation(BaseAutomation):
                 f.write(content)
             self.logger.info(f"Updated version to {self.current_version}")
             
-            os.chdir(main_project_dir)
+            # Execute package_model.py in the main project directory
+            os.chdir(self.main_project_dir)
             self.logger.info(f"Changed to: {os.getcwd()}")
             self.logger.info("Executing package_model.py...")
             result = subprocess.run(['python', 'package_model.py'], check=True)
             self.logger.info("✅ Model training completed")
             
-            source_file = main_project_dir / f"model_{self.current_version}.tar.gz"
+            # Move the model file to the repo directory
+            source_file = self.main_project_dir / f"model_{self.current_version}.tar.gz"
             target_dir = self.repo_dir / "test/sagemaker_tests/autogluon/inference/resources/model"
             target_dir.mkdir(parents=True, exist_ok=True)
             target_file = target_dir / f"model_{self.current_version}.tar.gz"
@@ -136,10 +149,14 @@ class Steps125Automation(BaseAutomation):
     def run_steps(self, steps_only=None):
         """Run steps 1, 2, and 5"""
         results = {}
+        
         if not steps_only or 1 in steps_only:
             results[1] = self.step1_create_branch()
+            
         if not steps_only or 2 in steps_only:
             results[2] = self.step2_update_toml()
+            
         if not steps_only or 5 in steps_only:
             results[5] = self.step5_package_model()
+        
         return results

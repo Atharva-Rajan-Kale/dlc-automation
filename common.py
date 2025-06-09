@@ -167,10 +167,18 @@ class BaseAutomation:
         self.is_major_release = (current_parts[0] != previous_parts[0] or 
                                (current_parts[1] != previous_parts[1] and current_parts[2] == '0'))
         self.short_version = current_version.replace('.', '')
-        original_dir = Path(os.getcwd())
-        self.workspace_dir = original_dir / "deep-learning-container"
+        
+        # Updated paths for new directory structure
+        # Running from: Projects/main-project-doc/
+        # Workspace at: Projects/deep-learning-container/
+        # Repo at: Projects/deep-learning-container/deep-learning-containers/
+        current_dir = Path(os.getcwd())
+        self.main_project_dir = current_dir  # Where automation scripts and package_model.py are
+        self.workspace_dir = current_dir.parent / "deep-learning-container"
         self.repo_dir = self.workspace_dir / "deep-learning-containers"
+        
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
+        self.logger.info(f"Main project directory: {self.main_project_dir}")
         self.logger.info(f"Workspace directory: {self.workspace_dir}")
         self.logger.info(f"Repository directory: {self.repo_dir}")

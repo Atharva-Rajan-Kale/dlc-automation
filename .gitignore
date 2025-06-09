@@ -1,5 +1,3 @@
-# Ignore the cloned deep learning container repository
-deep-learning-container/
 
 # Python files
 *.pyc
