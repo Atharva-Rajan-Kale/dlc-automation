@@ -4,7 +4,7 @@ import warnings
 import subprocess
 from autogluon.tabular import TabularDataset, TabularPredictor
 from autogluon.tabular.configs.config_helper import ConfigBuilder
-
+import shutil
 warnings.filterwarnings('ignore')
 
 version = '1.3.1'
@@ -36,3 +36,5 @@ predictor.leaderboard(silent=True)
 os.system(f'rm model_{version}.tar.gz')
 os.system(f'tar -C data-sm-package/ -czf model_{version}.tar.gz .')
 os.system(f'ls -la model_{version}.tar.gz')
+
+shutil.rmtree('data-sm-package')
