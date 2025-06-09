@@ -58,7 +58,7 @@ class ECRImageSelector:
                             pushed_at=image_detail['imagePushedAt'],
                             image_uri=f"{self.account_id}.dkr.ecr.{self.region}.amazonaws.com/{repository}:{tag}"
                         )
-                        self._parse_image_metadata(ecr_image)
+                        self.parse_image(ecr_image)
                         images.append(ecr_image)
             images.sort(key=lambda x: x.pushed_at, reverse=True)
             return images
@@ -67,7 +67,7 @@ class ECRImageSelector:
             print("💡 Make sure your AWS credentials have ECR read permissions")
             return []
     
-    def _parse_image_metadata(self, image: ECRImage):
+    def parse_image(self, image: ECRImage):
         """Parse PyTorch version, CUDA version and compute type from tag"""
         tag = image.tag            
         if '-gpu-' in tag:
@@ -167,16 +167,10 @@ class BaseAutomation:
         self.is_major_release = (current_parts[0] != previous_parts[0] or 
                                (current_parts[1] != previous_parts[1] and current_parts[2] == '0'))
         self.short_version = current_version.replace('.', '')
-        
-        # Updated paths for new directory structure
-        # Running from: Projects/main-project-doc/
-        # Workspace at: Projects/deep-learning-container/
-        # Repo at: Projects/deep-learning-container/deep-learning-containers/
         current_dir = Path(os.getcwd())
-        self.main_project_dir = current_dir  # Where automation scripts and package_model.py are
+        self.main_project_dir = current_dir  
         self.workspace_dir = current_dir.parent / "deep-learning-container"
         self.repo_dir = self.workspace_dir / "deep-learning-containers"
-        
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
         self.logger.info(f"Main project directory: {self.main_project_dir}")

@@ -29,11 +29,11 @@ class Step6Automation(BaseAutomation):
                 return False
             os.chdir(self.repo_dir)
             self.logger.info(f"Changed to repo directory: {os.getcwd()}")
-            if not self._fix_code_issues():
+            if not self.fix_code_issues():
                 return False
-            if not self._setup_build_environment(account_id, region):
+            if not self.setup_build_environment(account_id, region):
                 return False
-            if not self._build_docker_images():
+            if not self.build_docker_images():
                 return False
             self.logger.info("✅ Step 6 completed: Docker images built and uploaded")
             return True
@@ -44,7 +44,7 @@ class Step6Automation(BaseAutomation):
             os.chdir(original_dir)
             self.logger.info(f"Returned to original directory: {os.getcwd()}")
 
-    def _fix_code_issues(self):
+    def fix_code_issues(self):
         """Fix known issues in the codebase"""
         self.logger.info("🔧 Fixing code issues...")
         try:
@@ -100,7 +100,7 @@ class Step6Automation(BaseAutomation):
             self.logger.error(f"❌ Failed to fix code issues: {e}")
             return False
 
-    def _setup_build_environment(self, account_id: str, region: str):
+    def setup_build_environment(self, account_id: str, region: str):
         """Set up environment variables and dependencies"""
         self.logger.info("🛠️  Setting up build environment...")
         try:
@@ -131,7 +131,7 @@ class Step6Automation(BaseAutomation):
             self.logger.error(f"❌ Failed to setup build environment: {e}")
             return False
 
-    def _build_docker_images(self):
+    def build_docker_images(self):
         """Build and upload all Docker images"""
         self.logger.info("🏗️  Building Docker images...")
         try:

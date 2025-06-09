@@ -30,33 +30,33 @@ class AutoGluonReleaseAutomation:
         """Run the complete automation or specific steps"""
         try:
             self.logger.info("Starting AutoGluon release automation...")
-            if self._should_run_steps([1, 2, 5], steps_only):
+            if self.should_run_steps([1, 2, 5], steps_only):
                 self.logger.info("Running Steps 1, 2, and 5...")
                 step_125_results = self.steps_125.run_steps(steps_only)
                 self.results.update(step_125_results)
-            if self._should_run_steps([3, 4], steps_only):
+            if self.should_run_steps([3, 4], steps_only):
                 self.logger.info("Running Steps 3 and 4...")
                 step_34_results = self.steps_34.run_steps(steps_only)
                 self.results.update(step_34_results)
                 self.selected_images = self.steps_34.get_selected_images()
-            if self._should_run_steps([6], steps_only):
+            if self.should_run_steps([6], steps_only):
                 self.logger.info("Running Step 6...")
                 step_6_results = self.step_6.run_steps(steps_only)
                 self.results.update(step_6_results)
-            self._print_summary(steps_only)
+            self.print_summary(steps_only)
             return self.results
         except Exception as e:
             self.logger.error(f"❌ Automation failed: {e}")
             self.logger.exception("Full error details:")
             raise
 
-    def _should_run_steps(self, step_numbers, steps_only):
+    def should_run_steps(self, step_numbers, steps_only):
         """Check if any of the given step numbers should be run"""
         if not steps_only:
             return True
         return any(step in steps_only for step in step_numbers)
 
-    def _print_summary(self, steps_only):
+    def print_summary(self, steps_only):
         """Print automation summary"""
         print("\n" + "="*60)
         

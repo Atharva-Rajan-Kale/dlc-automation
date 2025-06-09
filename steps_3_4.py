@@ -43,9 +43,9 @@ class Steps34Automation(BaseAutomation):
             self.logger.info(f"Inference GPU: {image_selection['inference_gpu'].tag}")
             self.selected_images = image_selection
             if self.is_major_release:
-                success = self._create_major_docker_resources(image_selection)
+                success = self.create_major_docker_resources(image_selection)
             else:
-                success = self._update_minor_docker_resources(image_selection)
+                success = self.update_minor_docker_resources(image_selection)
             if success:
                 self.logger.info("✅ Step 3 completed: Docker resources created (not committed)")
             else:
@@ -57,7 +57,7 @@ class Steps34Automation(BaseAutomation):
         finally:
             os.chdir(original_dir)
     
-    def step4_update_buildspec_files(self):
+    def step4update_buildspec_files(self):
         """Step 4: Update buildspec.yml files"""
         self.logger.info("Step 4: Updating buildspec files")
         
@@ -73,11 +73,11 @@ class Steps34Automation(BaseAutomation):
             os.chdir(self.repo_dir)
             self.logger.info(f"Current working directory: {os.getcwd()}")
             
-            image_info = self._extract_buildspec_info_from_images()
+            image_info = self.extract_buildspec_info_from_images()
             self.logger.info(f"Extracted image info: {image_info}")
             
-            training_success = self._update_buildspec("training", image_info)
-            inference_success = self._update_buildspec("inference", image_info)
+            training_success = self.update_buildspec("training", image_info)
+            inference_success = self.update_buildspec("inference", image_info)
             
             if training_success and inference_success:
                 self.logger.info("✅ Step 4 completed: Buildspec files updated (not committed)")
@@ -91,7 +91,7 @@ class Steps34Automation(BaseAutomation):
         finally:
             os.chdir(original_dir)
 
-    def _extract_buildspec_info_from_images(self):
+    def extract_buildspec_info_from_images(self):
         """Extract version info from selected images for buildspec updates"""
         sample_image = self.selected_images['training_cpu']
         self.logger.info(f"Extracting info from sample image tag: {sample_image.tag}")
@@ -108,7 +108,7 @@ class Steps34Automation(BaseAutomation):
             'pytorch_version': pytorch_version
         }
 
-    def _update_buildspec(self, container_type, image_info):
+    def update_buildspec(self, container_type, image_info):
         """Update buildspec.yml for training or inference"""
         buildspec_path = Path(f"autogluon/{container_type}/buildspec.yml")
         if not buildspec_path.exists():
@@ -171,7 +171,7 @@ class Steps34Automation(BaseAutomation):
             self.logger.info(f"ℹ️  No changes needed for {buildspec_path}")
         return True
         
-    def _create_major_docker_resources(self, image_selection: Dict) -> bool:
+    def create_major_docker_resources(self, image_selection: Dict) -> bool:
         """Create new directories for major version (e.g., 1.3 -> 1.4)"""
         self.logger.info("Creating resources for MAJOR version update")
         prev_major_minor = '.'.join(self.previous_version.split('.')[:2])  
@@ -196,12 +196,12 @@ class Steps34Automation(BaseAutomation):
         shutil.copytree(source_inference_dir, target_inference_dir)
         self.logger.info(f"✅ Copied directory structures for version {curr_major_minor}")
         cuda_num = image_selection['cuda_version'][2:]  
-        self._update_dockerfiles_in_directory(target_training_dir, image_selection, "training", cuda_num)
-        self._update_dockerfiles_in_directory(target_inference_dir, image_selection, "inference", cuda_num)
+        self.update_dockerfiles_in_directory(target_training_dir, image_selection, "training", cuda_num)
+        self.update_dockerfiles_in_directory(target_inference_dir, image_selection, "inference", cuda_num)
         self.logger.info(f"✅ Updated Dockerfiles for version {curr_major_minor}")
         return True
 
-    def _update_minor_docker_resources(self, image_selection: Dict) -> bool:
+    def update_minor_docker_resources(self, image_selection: Dict) -> bool:
         """Update existing directories for minor version (e.g., 1.3.0 -> 1.3.1)"""
         self.logger.info("Updating resources for MINOR version update")
         major_minor = '.'.join(self.current_version.split('.')[:2])  
@@ -216,12 +216,12 @@ class Steps34Automation(BaseAutomation):
         
         self.logger.info(f"Updating existing directories: {training_dir} and {inference_dir}")
         cuda_num = image_selection['cuda_version'][2:]  
-        self._update_dockerfiles_in_directory(training_dir, image_selection, "training", cuda_num)
-        self._update_dockerfiles_in_directory(inference_dir, image_selection, "inference", cuda_num)
+        self.update_dockerfiles_in_directory(training_dir, image_selection, "training", cuda_num)
+        self.update_dockerfiles_in_directory(inference_dir, image_selection, "inference", cuda_num)
         self.logger.info(f"✅ Updated Dockerfiles in existing {major_minor} directories")
         return True
 
-    def _update_dockerfiles_in_directory(self, base_dir: Path, image_selection: Dict, 
+    def update_dockerfiles_in_directory(self, base_dir: Path, image_selection: Dict, 
                                         container_type: str, cuda_num: str):
         """Update Dockerfiles in the specified directory structure"""
         gpu_image = image_selection[f'{container_type}_gpu']
@@ -233,14 +233,14 @@ class Steps34Automation(BaseAutomation):
             return
         cpu_dockerfile = py3_dir / "Dockerfile.cpu"
         if cpu_dockerfile.exists():
-            self._update_single_dockerfile(cpu_dockerfile, cpu_image.image_uri, "CPU")
+            self.update_single_dockerfile(cpu_dockerfile, cpu_image.image_uri, "CPU")
         else:
             self.logger.warning(f"CPU Dockerfile not found: {cpu_dockerfile}")
         cuda_dir = py3_dir / f"cu{cuda_num}"
         if cuda_dir.exists():
             gpu_dockerfile = cuda_dir / "Dockerfile.gpu"
             if gpu_dockerfile.exists():
-                self._update_single_dockerfile(gpu_dockerfile, gpu_image.image_uri, "GPU")
+                self.update_single_dockerfile(gpu_dockerfile, gpu_image.image_uri, "GPU")
             else:
                 self.logger.warning(f"GPU Dockerfile not found: {gpu_dockerfile}")
         else:
@@ -251,13 +251,13 @@ class Steps34Automation(BaseAutomation):
                 old_cuda_dir.rename(cuda_dir)
                 gpu_dockerfile = cuda_dir / "Dockerfile.gpu"
                 if gpu_dockerfile.exists():
-                    self._update_single_dockerfile(gpu_dockerfile, gpu_image.image_uri, "GPU")
+                    self.update_single_dockerfile(gpu_dockerfile, gpu_image.image_uri, "GPU")
                 else:
                     self.logger.warning(f"GPU Dockerfile not found after rename: {gpu_dockerfile}")
             else:
                 self.logger.warning(f"No CUDA directory found in {py3_dir}")
 
-    def _update_single_dockerfile(self, dockerfile_path: Path, new_image_uri: str, image_type: str):
+    def update_single_dockerfile(self, dockerfile_path: Path, new_image_uri: str, image_type: str):
         """Update a single Dockerfile with new FROM statement and AUTOGLUON_VERSION"""
         try:
             with open(dockerfile_path, 'r') as f:
@@ -292,7 +292,7 @@ class Steps34Automation(BaseAutomation):
             results[3] = self.step3_create_docker_resources()
             
         if not steps_only or 4 in steps_only:
-            results[4] = self.step4_update_buildspec_files()
+            results[4] = self.step4update_buildspec_files()
         
         return results
 
