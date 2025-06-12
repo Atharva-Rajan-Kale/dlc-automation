@@ -134,14 +134,10 @@ class Steps125Automation(BaseAutomation):
     def run_steps(self, steps_only=None):
         """Run steps 1, 2, and 5"""
         results = {}
-        
         if not steps_only or 1 in steps_only:
             results[1] = self.step1_create_branch()
-            
         if not steps_only or 2 in steps_only:
             results[2] = self.step2_update_toml()
-            
         if not steps_only or 5 in steps_only:
             results[5] = self.step5_package_model()
-        
         return results
