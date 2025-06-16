@@ -10,8 +10,8 @@ class Step6Automation(BaseAutomation):
     def step6_build_upload_docker(self):
         """Step 6: Fix code issues, build and upload Docker images to ECR"""
         self.logger.info("Step 6: Building and uploading Docker images")
-        account_id = os.environ.get('ACCOUNT_ID')
-        region = os.environ.get('REGION')
+        account_id=os.environ.get('ACCOUNT_ID')
+        region=os.environ.get('REGION')
         if not account_id:
             self.logger.error("❌ ACCOUNT_ID environment variable not set")
             self.logger.info("💡 Please run: export ACCOUNT_ID=your_account_id")
@@ -22,7 +22,7 @@ class Step6Automation(BaseAutomation):
             return False
         self.logger.info(f"Using ACCOUNT_ID: {account_id}")
         self.logger.info(f"Using REGION: {region}")
-        original_dir = os.getcwd()
+        original_dir=os.getcwd()
         try:
             if not self.repo_dir.exists():
                 self.logger.error(f"Repository directory not found: {self.repo_dir}")
@@ -48,13 +48,13 @@ class Step6Automation(BaseAutomation):
         """Fix known issues in the codebase"""
         self.logger.info("🔧 Fixing code issues...")
         try:
-            patch_helper_path = Path("src/patch_helper.py")
+            patch_helper_path=Path("src/patch_helper.py")
             if patch_helper_path.exists():
                 with open(patch_helper_path, 'r') as f:
-                    content = f.read()
+                    content=f.read()
                 
                 if "from src.constants import PATCHING_INFO_PATH_WITHIN_DLC" in content:
-                    content = content.replace(
+                    content=content.replace(
                         "from src.constants import PATCHING_INFO_PATH_WITHIN_DLC",
                         "from constants import PATCHING_INFO_PATH_WITHIN_DLC"
                     )
@@ -66,20 +66,20 @@ class Step6Automation(BaseAutomation):
                     self.logger.info("ℹ️  patch_helper.py import already fixed")
             else:
                 self.logger.warning("⚠️  patch_helper.py not found")
-            utils_path = Path("src/utils.py")
+            utils_path=Path("src/utils.py")
             if utils_path.exists():
                 with open(utils_path, 'r') as f:
-                    content = f.read()
+                    content=f.read()
                 if "_project_root" not in content:
-                    lines = content.split('\n')
-                    sys_import_index = -1
+                    lines=content.split('\n')
+                    sys_import_index=-1
                     for i, line in enumerate(lines):
                         if line.strip() == "import sys":
-                            sys_import_index = i
+                            sys_import_index=i
                             break
                     if sys_import_index != -1:
-                        new_lines = [
-                            "_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))",
+                        new_lines=[
+                            "_project_root=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))",
                             "if _project_root not in sys.path:",
                             "    sys.path.insert(0, _project_root)"
                         ]
@@ -106,11 +106,11 @@ class Step6Automation(BaseAutomation):
         try:
             self.logger.info(f"Using ACCOUNT_ID={account_id}, REGION={region}")
             self.logger.info("🔐 Logging into your ECR...")
-            login_cmd = f"aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {account_id}.dkr.ecr.{region}.amazonaws.com"
+            login_cmd=f"aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {account_id}.dkr.ecr.{region}.amazonaws.com"
             subprocess.run(login_cmd, shell=True, check=True)
             self.logger.info("✅ Logged into your ECR")
             self.logger.info("🔐 Logging into AWS's ECR...")
-            aws_login_cmd = f"aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 763104351884.dkr.ecr.us-west-2.amazonaws.com"
+            aws_login_cmd=f"aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 763104351884.dkr.ecr.us-west-2.amazonaws.com"
             subprocess.run(aws_login_cmd, shell=True, check=True)
             self.logger.info("✅ Logged into AWS's ECR")
             self.logger.info("🐍 Setting up Python environment...")
@@ -135,7 +135,7 @@ class Step6Automation(BaseAutomation):
         """Build and upload all Docker images"""
         self.logger.info("🏗️  Building Docker images...")
         try:
-            os.environ['REPOSITORY_NAME'] = 'beta-autogluon-training'
+            os.environ['REPOSITORY_NAME']='beta-autogluon-training'
             self.logger.info("Building training CPU image...")
             subprocess.run([
                 "dlc/bin/python", "src/main.py",
@@ -156,7 +156,7 @@ class Step6Automation(BaseAutomation):
                 "--py_versions", "py3"
             ], check=True)
             self.logger.info("✅ Training GPU image built")            
-            os.environ['REPOSITORY_NAME'] = 'beta-autogluon-inference'
+            os.environ['REPOSITORY_NAME']='beta-autogluon-inference'
             self.logger.info("Building inference CPU image...")
             subprocess.run([
                 "dlc/bin/python", "src/main.py",
@@ -185,7 +185,7 @@ class Step6Automation(BaseAutomation):
 
     def run_steps(self, steps_only=None):
         """Run step 6"""
-        results = {}
+        results={}
         if not steps_only or 6 in steps_only:
-            results[6] = self.step6_build_upload_docker()
+            results[6]=self.step6_build_upload_docker()
         return results
