@@ -87,53 +87,6 @@ class EnhancedAutoGluonReleaseAutomation:
             self.logger.error(f"❌ SageMaker test agent failed: {e}")
             return False
 
-    def run_full_testing_suite(self):
-        """Run both pip check and SageMaker tests"""
-        self.logger.info("🔬 Running Full Testing Suite...")
-        try:
-            pip_success=self.run_pip_check_only()
-            sagemaker_success=self.run_sagemaker_tests_only()
-            overall_success=pip_success and sagemaker_success
-            self.logger.info("📊 Testing Suite Results:")
-            self.logger.info(f"   Pip Check: {'✅ PASSED' if pip_success else '❌ FAILED'}")
-            self.logger.info(f"   SageMaker Tests: {'✅ PASSED' if sagemaker_success else '❌ FAILED'}")
-            self.logger.info(f"   Overall: {'✅ PASSED' if overall_success else '❌ FAILED'}")
-            return overall_success
-        except Exception as e:
-            self.logger.error(f"❌ Full testing suite failed: {e}")
-            return False
-
-    def run_iterative_fix_cycle(self, max_iterations=3, enable_sagemaker_tests=True):
-        """Run iterative build-test-fix cycle with optional SageMaker testing"""
-        self.logger.info("🔄 Starting iterative fix cycle...")
-        for iteration in range(max_iterations):
-            self.logger.info(f"🔄 Iteration {iteration + 1}/{max_iterations}")
-            self.logger.info("🏗️ Building images...")
-            build_success=self.step_6.step6_build_upload_docker()
-            if not build_success:
-                self.logger.error(f"❌ Build failed on iteration {iteration + 1}")
-                return False
-            self.logger.info("🧪 Running pip check...")
-            pip_check_success=self.pip_check_agent.run_pip_check_agent()
-            sagemaker_success=True
-            if enable_sagemaker_tests:
-                self.logger.info("🧪 Running SageMaker tests...")
-                sagemaker_success=self.sagemaker_test_agent.run_sagemaker_test_agent()
-            if pip_check_success and sagemaker_success:
-                self.logger.info(f"✅ All checks passed on iteration {iteration + 1}")
-                return True
-            else:
-                test_results=[]
-                if not pip_check_success:
-                    test_results.append("pip check issues")
-                if not sagemaker_success:
-                    test_results.append("SageMaker test failures")
-                self.logger.info(f"ℹ️ Issues found on iteration {iteration + 1}: {', '.join(test_results)}")
-                if iteration == max_iterations - 1:
-                    self.logger.info("ℹ️ Note: If automatic fixes were applied, manual review may resolve remaining issues")
-        self.logger.warning(f"⚠️ Completed {max_iterations} iterations - check logs for final status")
-        return True  
-
     def should_run_steps(self, step_numbers, steps_only):
         """Check if any of the given step numbers should be run"""
         if not steps_only:
