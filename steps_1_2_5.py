@@ -6,11 +6,11 @@ from pathlib import Path
 from common import BaseAutomation
 
 class Steps125Automation(BaseAutomation):
-    """Handles Steps 1, 2, and 5: Branch creation, TOML update, and Package model"""
+    """Handles Steps 1, 2, and 5:Branch creation, TOML update, and Package model"""
     
     def step1_create_branch(self):
-        """Step 1: Cut a new branch in fork to work on a new release"""
-        self.logger.info("Step 1: Creating release branch")
+        """Step 1:Cut a new branch in fork to work on a new release"""
+        self.logger.info("Step 1:Creating release branch")
         self.workspace_dir.mkdir(exist_ok=True)
         original_dir=os.getcwd()
         try:
@@ -20,7 +20,7 @@ class Steps125Automation(BaseAutomation):
                 subprocess.run(["git", "clone", self.fork_url, "deep-learning-containers"], check=True)
             os.chdir("deep-learning-containers")
             result=subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True)
-            self.logger.info(f"Working in repository: {result.stdout.strip()}")
+            self.logger.info(f"Working in repository:{result.stdout.strip()}")
             try:
                 subprocess.run(["git", "remote", "get-url", "upstream"], capture_output=True, check=True)
                 self.logger.info("Upstream remote already exists")
@@ -33,31 +33,31 @@ class Steps125Automation(BaseAutomation):
             subprocess.run(["git", "checkout", "master"], check=True)
             subprocess.run(["git", "reset", "--hard", "upstream/master"], check=True)
             branch_name=f"autogluon-{self.current_version}-release"
-            self.logger.info(f"Creating branch: {branch_name}")
+            self.logger.info(f"Creating branch:{branch_name}")
             try:
                 subprocess.run(["git", "checkout", "-b", branch_name], check=True)
             except:
                 subprocess.run(["git", "checkout", branch_name], check=True)
-            self.logger.info("✅ Step 1 completed: Release branch created")
+            self.logger.info("✅ Step 1 completed:Release branch created")
             return True
         except Exception as e:
             os.chdir(original_dir)
-            self.logger.error(f"❌ Step 1 failed: {e}")
+            self.logger.error(f"❌ Step 1 failed:{e}")
             return False
 
     def step2_update_toml(self):
-        """Step 2: Update toml file to build only AutoGluon"""
-        self.logger.info("Step 2: Updating TOML configuration")
+        """Step 2:Update toml file to build only AutoGluon"""
+        self.logger.info("Step 2:Updating TOML configuration")
         original_dir=os.getcwd()
         try:
             if not self.repo_dir.exists():
-                self.logger.error(f"Repository directory not found: {self.repo_dir}")
+                self.logger.error(f"Repository directory not found:{self.repo_dir}")
                 return False
             
             os.chdir(self.repo_dir)
             toml_path=Path("dlc_developer_config.toml")
             if not toml_path.exists():
-                self.logger.error(f"TOML file not found: {toml_path.absolute()}")
+                self.logger.error(f"TOML file not found:{toml_path.absolute()}")
                 return False
             with open(toml_path, 'r') as f:
                 content=f.read()
@@ -84,24 +84,24 @@ class Steps125Automation(BaseAutomation):
                 f.write(content)
             subprocess.run(["git", "add", str(toml_path)], check=True)
             subprocess.run(["git", "commit", "-m", 
-                           f"AutoGluon {self.current_version}: Update TOML for AutoGluon-only build"], 
+                           f"AutoGluon {self.current_version}:Update TOML for AutoGluon-only build"], 
                           check=True)
-            self.logger.info("✅ Step 2 completed: TOML updated and committed")
+            self.logger.info("✅ Step 2 completed:TOML updated and committed")
             return True
         except Exception as e:
-            self.logger.error(f"❌ Step 2 failed: {e}")
+            self.logger.error(f"❌ Step 2 failed:{e}")
             return False
         finally:
             os.chdir(original_dir)
     
     def step5_package_model(self):
-        """Step 5: Update package_model.py version and execute it"""
-        self.logger.info("Step 5: Packaging model")
+        """Step 5:Update package_model.py version and execute it"""
+        self.logger.info("Step 5:Packaging model")
         package_model_path=self.main_project_dir / "package_model.py"
-        self.logger.info(f"Main project dir: {self.main_project_dir}")
-        self.logger.info(f"Looking for package_model.py in: {self.main_project_dir}")
+        self.logger.info(f"Main project dir:{self.main_project_dir}")
+        self.logger.info(f"Looking for package_model.py in:{self.main_project_dir}")
         if not package_model_path.exists():
-            self.logger.error(f"package_model.py not found at: {package_model_path}")
+            self.logger.error(f"package_model.py not found at:{package_model_path}")
             return False
         original_cwd=os.getcwd()
         try:
@@ -112,7 +112,7 @@ class Steps125Automation(BaseAutomation):
                 f.write(content)
             self.logger.info(f"Updated version to {self.current_version}")
             os.chdir(self.main_project_dir)
-            self.logger.info(f"Changed to: {os.getcwd()}")
+            self.logger.info(f"Changed to:{os.getcwd()}")
             self.logger.info("Executing package_model.py...")
             result=subprocess.run(['python', 'package_model.py'], check=True)
             self.logger.info("✅ Model training completed")
@@ -121,14 +121,14 @@ class Steps125Automation(BaseAutomation):
             target_dir.mkdir(parents=True, exist_ok=True)
             target_file=target_dir / f"model_{self.current_version}.tar.gz"
             shutil.move(str(source_file), str(target_file))
-            self.logger.info(f"✅ Moved model to: {target_file}")
+            self.logger.info(f"✅ Moved model to:{target_file}")
             return True
         except Exception as e:
-            self.logger.error(f"❌ Step 5 failed: {e}")
+            self.logger.error(f"❌ Step 5 failed:{e}")
             return False
         finally:
             os.chdir(original_cwd)
-            self.logger.info(f"Returned to: {os.getcwd()}")
+            self.logger.info(f"Returned to:{os.getcwd()}")
 
     def run_steps(self, steps_only=None):
         """Run steps 1, 2, and 5"""

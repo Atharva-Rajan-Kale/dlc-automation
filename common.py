@@ -14,16 +14,16 @@ from collections import defaultdict
 
 @dataclass
 class ECRImage:
-    repository: str
-    tag: str
-    pushed_at: datetime
-    image_uri: str
-    compute_type: str=""
-    cuda_version: str=""
-    pytorch_version: str=""
+    repository:str
+    tag:str
+    pushed_at:datetime
+    image_uri:str
+    compute_type:str=""
+    cuda_version:str=""
+    pytorch_version:str=""
 
 class ECRImageSelector:
-    def __init__(self, account_id: str="763104351884", region: str="us-west-2"):
+    def __init__(self, account_id:str="763104351884", region:str="us-west-2"):
         self.account_id=account_id
         self.region=region
         try:
@@ -32,11 +32,11 @@ class ECRImageSelector:
             self.logger=logging.getLogger(__name__)
             self.logger.info("✅ AWS ECR credentials verified")
         except Exception as e:
-            print(f"❌ ECR access failed: {e}")
+            print(f"❌ ECR access failed:{e}")
             print("💡 Please configure your AWS credentials:")
             raise Exception("AWS credentials required to access ECR")
     
-    def get_pytorch_images(self, framework_type: str) -> List[ECRImage]:
+    def get_pytorch_images(self, framework_type:str) -> List[ECRImage]:
         """Get pytorch-training or pytorch-inference images"""
         repository=f"pytorch-{framework_type}"
         try:
@@ -60,14 +60,14 @@ class ECRImageSelector:
                         )
                         self.parse_image(ecr_image)
                         images.append(ecr_image)
-            images.sort(key=lambda x: x.pushed_at, reverse=True)
+            images.sort(key=lambda x:x.pushed_at, reverse=True)
             return images
         except Exception as e:
-            print(f"❌ Error getting {repository} images: {e}")
+            print(f"❌ Error getting {repository} images:{e}")
             print("💡 Make sure your AWS credentials have ECR read permissions")
             return []
     
-    def parse_image(self, image: ECRImage):
+    def parse_image(self, image:ECRImage):
         """Parse PyTorch version, CUDA version and compute type from tag"""
         tag=image.tag            
         if '-gpu-' in tag:
@@ -87,7 +87,7 @@ class ECRImageSelector:
     
     def select_matching_cuda_images(self) -> Dict:
         """
-        Select 4 images: 2 CPU (no CUDA) + 2 GPU (matching CUDA)
+        Select 4 images:2 CPU (no CUDA) + 2 GPU (matching CUDA)
         Prioritize same PyTorch version and highest CUDA version
         """
         training_images=self.get_pytorch_images("training")
@@ -102,7 +102,7 @@ class ECRImageSelector:
         if not training_cpu or not inference_cpu:
             print("❌ Missing CPU images")
             return None
-        combinations=defaultdict(lambda: {'training_cpu': [], 'training_gpu': [], 'inference_cpu': [], 'inference_gpu': []})
+        combinations=defaultdict(lambda:{'training_cpu':[], 'training_gpu':[], 'inference_cpu':[], 'inference_gpu':[]})
         for img in training_cpu:
             if hasattr(img, 'pytorch_version') and img.pytorch_version:
                 combinations[img.pytorch_version]['training_cpu'].append(img)
@@ -120,12 +120,12 @@ class ECRImageSelector:
         best_selection=None
         pytorch_versions=set()
         for key in combinations.keys():
-            if '+' not in key:  
+            if '+' not in key: 
                 pytorch_versions.add(key)
-            else:  
+            else: 
                 pytorch_versions.add(key.split('+')[0])
-        pytorch_versions=sorted(pytorch_versions, key=lambda x: [int(i) for i in x.split('.')], reverse=True)
-        print(f"📋 Available PyTorch versions: {pytorch_versions}")
+        pytorch_versions=sorted(pytorch_versions, key=lambda x:[int(i) for i in x.split('.')], reverse=True)
+        print(f"📋 Available PyTorch versions:{pytorch_versions}")
         for pytorch_version in pytorch_versions:
             if pytorch_version not in combinations:
                 continue
@@ -138,16 +138,16 @@ class ECRImageSelector:
                     if (combinations[key]['training_gpu'] and combinations[key]['inference_gpu']):
                         cuda_versions.append(cuda_version)
             if cuda_versions:
-                cuda_versions.sort(key=lambda x: int(x[2:]), reverse=True)
+                cuda_versions.sort(key=lambda x:int(x[2:]), reverse=True)
                 best_cuda=cuda_versions[0]
                 gpu_key=f"{pytorch_version}+{best_cuda}"
                 best_selection={
-                    'pytorch_version': pytorch_version,
-                    'cuda_version': best_cuda,
-                    'training_cpu': combinations[pytorch_version]['training_cpu'][0],      
-                    'training_gpu': combinations[gpu_key]['training_gpu'][0],              
-                    'inference_cpu': combinations[pytorch_version]['inference_cpu'][0],    
-                    'inference_gpu': combinations[gpu_key]['inference_gpu'][0]             
+                    'pytorch_version':pytorch_version,
+                    'cuda_version':best_cuda,
+                    'training_cpu':combinations[pytorch_version]['training_cpu'][0],      
+                    'training_gpu':combinations[gpu_key]['training_gpu'][0],              
+                    'inference_cpu':combinations[pytorch_version]['inference_cpu'][0],    
+                    'inference_gpu':combinations[gpu_key]['inference_gpu'][0]             
                 }
                 print(f"✅ Found complete set with PyTorch {pytorch_version} and CUDA {best_cuda}")
                 break
@@ -158,7 +158,7 @@ class ECRImageSelector:
 
 class BaseAutomation:
     """Base class with common functionality"""
-    def __init__(self, current_version: str, previous_version: str, fork_url: str):
+    def __init__(self, current_version:str, previous_version:str, fork_url:str):
         self.current_version=current_version
         self.previous_version=previous_version
         self.fork_url=fork_url
@@ -173,6 +173,6 @@ class BaseAutomation:
         self.repo_dir=self.workspace_dir / "deep-learning-containers"
         logging.basicConfig(level=logging.INFO)
         self.logger=logging.getLogger(__name__)
-        self.logger.info(f"Main project directory: {self.main_project_dir}")
-        self.logger.info(f"Workspace directory: {self.workspace_dir}")
-        self.logger.info(f"Repository directory: {self.repo_dir}")
+        self.logger.info(f"Main project directory:{self.main_project_dir}")
+        self.logger.info(f"Workspace directory:{self.workspace_dir}")
+        self.logger.info(f"Repository directory:{self.repo_dir}")

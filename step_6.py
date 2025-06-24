@@ -6,43 +6,43 @@ from pathlib import Path
 from common import BaseAutomation
 
 class Step6Automation(BaseAutomation):
-    """Handles Step 6: Docker Build and Upload"""
+    """Handles Step 6:Docker Build and Upload"""
     def step6_build_upload_docker(self):
-        """Step 6: Fix code issues, build and upload Docker images to ECR"""
-        self.logger.info("Step 6: Building and uploading Docker images")
+        """Step 6:Fix code issues, build and upload Docker images to ECR"""
+        self.logger.info("Step 6:Building and uploading Docker images")
         account_id=os.environ.get('ACCOUNT_ID')
         region=os.environ.get('REGION')
         if not account_id:
             self.logger.error("❌ ACCOUNT_ID environment variable not set")
-            self.logger.info("💡 Please run: export ACCOUNT_ID=your_account_id")
+            self.logger.info("💡 Please run:export ACCOUNT_ID=your_account_id")
             return False
         if not region:
             self.logger.error("❌ REGION environment variable not set")
-            self.logger.info("💡 Please run: export REGION=us-east-1")
+            self.logger.info("💡 Please run:export REGION=us-east-1")
             return False
-        self.logger.info(f"Using ACCOUNT_ID: {account_id}")
-        self.logger.info(f"Using REGION: {region}")
+        self.logger.info(f"Using ACCOUNT_ID:{account_id}")
+        self.logger.info(f"Using REGION:{region}")
         original_dir=os.getcwd()
         try:
             if not self.repo_dir.exists():
-                self.logger.error(f"Repository directory not found: {self.repo_dir}")
+                self.logger.error(f"Repository directory not found:{self.repo_dir}")
                 return False
             os.chdir(self.repo_dir)
-            self.logger.info(f"Changed to repo directory: {os.getcwd()}")
+            self.logger.info(f"Changed to repo directory:{os.getcwd()}")
             if not self.fix_code_issues():
                 return False
             if not self.setup_build_environment(account_id, region):
                 return False
             if not self.build_docker_images():
                 return False
-            self.logger.info("✅ Step 6 completed: Docker images built and uploaded")
+            self.logger.info("✅ Step 6 completed:Docker images built and uploaded")
             return True
         except Exception as e:
-            self.logger.error(f"❌ Step 6 failed: {e}")
+            self.logger.error(f"❌ Step 6 failed:{e}")
             return False
         finally:
             os.chdir(original_dir)
-            self.logger.info(f"Returned to original directory: {os.getcwd()}")
+            self.logger.info(f"Returned to original directory:{os.getcwd()}")
 
     def fix_code_issues(self):
         """Fix known issues in the codebase"""
@@ -97,10 +97,10 @@ class Step6Automation(BaseAutomation):
                 self.logger.warning("⚠️  utils.py not found")
             return True
         except Exception as e:
-            self.logger.error(f"❌ Failed to fix code issues: {e}")
+            self.logger.error(f"❌ Failed to fix code issues:{e}")
             return False
 
-    def setup_build_environment(self, account_id: str, region: str):
+    def setup_build_environment(self, account_id:str, region:str):
         """Set up environment variables and dependencies"""
         self.logger.info("🛠️  Setting up build environment...")
         try:
@@ -128,7 +128,7 @@ class Step6Automation(BaseAutomation):
             self.logger.info("✅ Setup script completed")
             return True
         except Exception as e:
-            self.logger.error(f"❌ Failed to setup build environment: {e}")
+            self.logger.error(f"❌ Failed to setup build environment:{e}")
             return False
 
     def build_docker_images(self):
@@ -180,7 +180,7 @@ class Step6Automation(BaseAutomation):
             self.logger.info("🎉 All Docker images built and uploaded successfully!")
             return True
         except Exception as e:
-            self.logger.error(f"❌ Failed to build Docker images: {e}")
+            self.logger.error(f"❌ Failed to build Docker images:{e}")
             return False
 
     def run_steps(self, steps_only=None):
