@@ -653,15 +653,10 @@ class GitHubPRAutomation:
         if token:
             self.logger.info("🔑 Using GitHub token for API access")
             success = self.create_pr_via_api(token)
-        else:
-            self.logger.info("🔧 Trying GitHub CLI for PR creation")
-            success = self.create_pr_via_gh_cli()
-        if success:
             self.logger.info("✅ PR creation completed successfully")
         else:
             self.logger.error("❌ PR creation failed")
         return success
-
 
 if __name__ == "__main__":
     import argparse
