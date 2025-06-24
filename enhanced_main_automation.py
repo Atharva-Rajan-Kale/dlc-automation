@@ -42,7 +42,7 @@ class EnhancedAutoGluonReleaseAutomation:
         self.pr_automation = GitHubPRAutomation(
             current_version=current_version,
             fork_url=fork_url,
-            repo_dir=self.steps_125.repo_dir  # Use repo_dir from base automation
+            repo_dir=self.steps_125.repo_dir
         )
         
         self.results = {}
@@ -63,7 +63,7 @@ class EnhancedAutoGluonReleaseAutomation:
                 pr_number = self.security_test_agent.get_current_pr_number()
                 
                 if pr_number:
-                    # Wait for security tests to complete (pass or fail) before AI analysis
+                    # Wait for security tests to complete before AI analysis
                     self.logger.info("⏳ Waiting for security tests to complete before AI analysis...")
                     self.security_test_agent.wait_for_security_tests_to_complete(pr_number, max_wait_minutes=45)
                     
@@ -158,10 +158,8 @@ class EnhancedAutoGluonReleaseAutomation:
     def run_automation_with_pr(self, steps_only=None, enable_pip_check=True, enable_sagemaker_tests=True, create_pr=True):
         """Run automation with integrated testing and automatic PR + security testing"""
         try:
-            # Run the main automation steps
             results = self.run_automation_with_testing(steps_only, enable_pip_check, enable_sagemaker_tests, enable_security_tests=False)
-            
-            # Check if we should create PR (always includes security testing now)
+            # Check if we should create PR
             if create_pr and self.should_run_steps([7], steps_only):
                 # Only create PR if core steps completed successfully
                 core_steps_success = all(
@@ -320,8 +318,6 @@ class EnhancedAutoGluonReleaseAutomation:
             if not pr_number:
                 self.logger.warning("⚠️ No existing PR found for security testing")
                 self.logger.info("🚀 Creating PR first (required for security testing)...")
-                
-                # Create PR first since security testing requires it
                 pr_success = self.pr_automation.create_pull_request()
                 if not pr_success:
                     self.logger.error("❌ Failed to create PR - cannot run agentic security tests")
@@ -349,79 +345,6 @@ class EnhancedAutoGluonReleaseAutomation:
         except Exception as e:
             self.logger.error(f"❌ Agentic security test agent failed: {e}")
             return False
-
-    def run_full_testing_suite(self, include_security=True):
-        """Run all testing agents: pip check, SageMaker tests, and optionally security tests"""
-        self.logger.info("🔬 Running Full Testing Suite...")
-        self.logger.info("ℹ️ Note: Security testing is now automatic with PR creation")
-        try:
-            pip_success = self.run_pip_check_only()
-            sagemaker_success = self.run_sagemaker_tests_only()
-            
-            security_success = True
-            if include_security:
-                security_success = self.run_security_tests_only()
-            
-            overall_success = pip_success and sagemaker_success and security_success
-            
-            self.logger.info("📊 Testing Suite Results:")
-            self.logger.info(f"   Pip Check: {'✅ PASSED' if pip_success else '❌ FAILED'}")
-            self.logger.info(f"   SageMaker Tests: {'✅ PASSED' if sagemaker_success else '❌ FAILED'}")
-            if include_security:
-                self.logger.info(f"   Security Tests: {'✅ PASSED' if security_success else '❌ FAILED'}")
-                self.logger.info("   ℹ️ Tip: Use --create-pr for integrated PR + security testing")
-            self.logger.info(f"   Overall: {'✅ PASSED' if overall_success else '❌ FAILED'}")
-            return overall_success
-        except Exception as e:
-            self.logger.error(f"❌ Full testing suite failed: {e}")
-            return False
-
-    def run_iterative_fix_cycle(self, max_iterations=3, enable_sagemaker_tests=True, enable_security_tests=True):
-        """Run iterative build-test-fix cycle with optional SageMaker and security testing"""
-        self.logger.info("🔄 Starting iterative fix cycle...")
-        self.logger.info("ℹ️ Note: Security testing is now automatic with PR creation")
-        
-        for iteration in range(max_iterations):
-            self.logger.info(f"🔄 Iteration {iteration + 1}/{max_iterations}")
-            
-            self.logger.info("🏗️ Building images...")
-            build_success = self.step_6.step6_build_upload_docker()
-            if not build_success:
-                self.logger.error(f"❌ Build failed on iteration {iteration + 1}")
-                return False
-            
-            self.logger.info("🧪 Running pip check...")
-            pip_check_success = self.pip_check_agent.run_pip_check_agent()
-            
-            sagemaker_success = True
-            if enable_sagemaker_tests:
-                self.logger.info("🧪 Running SageMaker tests...")
-                sagemaker_success = self.sagemaker_test_agent.run_sagemaker_test_agent()
-            
-            security_success = True
-            if enable_security_tests:
-                self.logger.info("🛡️ Running security tests (will create PR if needed)...")
-                security_success = self.security_test_agent.run_security_test_agent()
-            
-            if pip_check_success and sagemaker_success and security_success:
-                self.logger.info(f"✅ All checks passed on iteration {iteration + 1}")
-                return True
-            else:
-                test_results = []
-                if not pip_check_success:
-                    test_results.append("pip check issues")
-                if not sagemaker_success:
-                    test_results.append("SageMaker test failures")
-                if not security_success:
-                    test_results.append("security test failures")
-                
-                self.logger.info(f"ℹ️ Issues found on iteration {iteration + 1}: {', '.join(test_results)}")
-                
-                if iteration == max_iterations - 1:
-                    self.logger.info("ℹ️ Note: If automatic fixes were applied, manual review may resolve remaining issues")
-        
-        self.logger.warning(f"⚠️ Completed {max_iterations} iterations - check logs for final status")
-        return True
 
     def should_run_steps(self, step_numbers, steps_only):
         """Check if any of the given step numbers should be run"""
@@ -534,12 +457,12 @@ class EnhancedAutoGluonReleaseAutomation:
         return self.pr_automation.wait_for_tests(pr_number, max_wait_minutes)
 
     def run_automation_with_pr_monitoring(self, steps_only=None, enable_pip_check=True, enable_sagemaker_tests=True, create_pr=True, wait_for_tests=False, max_wait_minutes=60):
-        """Run automation with PR creation (includes automatic security testing) and optional test monitoring"""
+        """Run automation with PR creation"""
         try:
             # Run the main automation steps
             results = self.run_automation_with_testing(steps_only, enable_pip_check, enable_sagemaker_tests, enable_security_tests=False)
             
-            # Check if we should create PR (always includes security testing now)
+            # Check if we should create PR
             if create_pr and self.should_run_steps([7], steps_only):
                 # Only create PR if core steps completed successfully
                 core_steps_success = all(
@@ -677,8 +600,6 @@ def main():
             create_pr=args.create_pr
         )
         success = all(results.values())
-    
-    # Use agentic summary
     automation.print_enhanced_summary(None)
     
     exit(0 if success else 1)
