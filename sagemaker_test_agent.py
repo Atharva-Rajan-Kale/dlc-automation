@@ -17,24 +17,24 @@ from common import BaseAutomation, ECRImageSelector
 
 @dataclass
 class TestError:
-    error_type: str
-    error_message: str
-    test_file: str
-    line_number: Optional[str]
-    full_traceback: str
+    error_type:str
+    error_message:str
+    test_file:str
+    line_number:Optional[str]
+    full_traceback:str
 
 class TestFixPlan(BaseModel):
-    errors: List[Dict]=Field(description="List of test errors found")
-    code_fixes: List[Dict]=Field(description="Code fixes to apply")
-    config_fixes: List[Dict]=Field(description="Configuration fixes to apply")
-    dependency_fixes: List[Dict]=Field(description="Dependency fixes to apply")
-    retry_strategy: str=Field(description="Strategy for retrying tests")
-    estimated_success_rate: int=Field(description="Estimated success rate after fixes (0-100)")
+    errors:List[Dict]=Field(description="List of test errors found")
+    code_fixes:List[Dict]=Field(description="Code fixes to apply")
+    config_fixes:List[Dict]=Field(description="Configuration fixes to apply")
+    dependency_fixes:List[Dict]=Field(description="Dependency fixes to apply")
+    retry_strategy:str=Field(description="Strategy for retrying tests")
+    estimated_success_rate:int=Field(description="Estimated success rate after fixes (0-100)")
 
 class SageMakerTestAgent(BaseAutomation):
     """Agentic system for automatically running and fixing SageMaker tests"""
     
-    def __init__(self, current_version: str, previous_version: str, fork_url: str):
+    def __init__(self, current_version:str, previous_version:str, fork_url:str):
         super().__init__(current_version, previous_version, fork_url)
         self.setup_bedrock_client()
         self.setup_langchain()
@@ -65,12 +65,12 @@ class SageMakerTestAgent(BaseAutomation):
                     client=self.bedrock_client,
                     model_id=model,
                     provider="anthropic" if inference_profile_arn and model == inference_profile_arn else None,
-                    model_kwargs={"max_tokens": 4000, "temperature": 0.1, "top_p": 0.9}
+                    model_kwargs={"max_tokens":4000, "temperature":0.1, "top_p":0.9}
                 )
                 self.logger.info(f"✅ Initialized Bedrock with {model}")
                 break
             except Exception as e:
-                self.logger.warning(f"⚠️ Failed to initialize {model}: {e}")
+                self.logger.warning(f"⚠️ Failed to initialize {model}:{e}")
                 continue
         else:
             raise Exception("Failed to initialize any Bedrock model")
@@ -81,17 +81,17 @@ class SageMakerTestAgent(BaseAutomation):
 
             Return ONLY valid JSON with this structure:
             {{
-              "errors": [{{"package": "module_name", "description": "brief error description"}}],
-              "code_fixes": [{{"type": "modify_file", "file_path": "path/to/file", "changes": "description", "new_content": "full file content"}}],
-              "config_fixes": [{{"type": "config_change", "setting": "SETTING_NAME", "value": "new_value", "description": "why"}}],
-              "dependency_fixes": [{{"type": "dependency", "action": "install", "package": "package_name", "version": "version"}}],
-              "retry_strategy": "modified",
-              "estimated_success_rate": 85
+              "errors":[{{"package":"module_name", "description":"brief error description"}}],
+              "code_fixes":[{{"type":"modify_file", "file_path":"path/to/file", "changes":"description", "new_content":"full file content"}}],
+              "config_fixes":[{{"type":"config_change", "setting":"SETTING_NAME", "value":"new_value", "description":"why"}}],
+              "dependency_fixes":[{{"type":"dependency", "action":"install", "package":"package_name", "version":"version"}}],
+              "retry_strategy":"modified",
+              "estimated_success_rate":85
             }}"""),
             ("human", """Analyze this SageMaker test failure:
 
-            Container: {container_type}, Tag: {image_tag}, Framework: {framework_version}
-            Test Directory: {test_directory}
+            Container:{container_type}, Tag:{image_tag}, Framework:{framework_version}
+            Test Directory:{test_directory}
 
             Errors:
             {test_output}
@@ -114,19 +114,19 @@ class SageMakerTestAgent(BaseAutomation):
         for repo in repositories:
             try:
                 response=ecr_client.describe_images(repositoryName=repo, maxResults=50)
-                images=sorted(response['imageDetails'], key=lambda x: x['imagePushedAt'], reverse=True)
+                images=sorted(response['imageDetails'], key=lambda x:x['imagePushedAt'], reverse=True)
                 for image in images:
                     if 'imageTags' in image:
                         tag=image['imageTags'][0]
                         if '-cpu-' in tag:
                             image_uri=f"{account_id}.dkr.ecr.{region}.amazonaws.com/{repo}:{tag}"
                             latest_images[repo]=[image_uri]
-                            self.logger.info(f"📦 {repo}: {tag}")
+                            self.logger.info(f"📦 {repo}:{tag}")
                             break
                 else:
                     latest_images[repo]=[]
             except Exception as e:
-                self.logger.error(f"❌ Failed to get images from {repo}: {e}")
+                self.logger.error(f"❌ Failed to get images from {repo}:{e}")
                 latest_images[repo]=[]
         return latest_images
 
@@ -152,11 +152,11 @@ class SageMakerTestAgent(BaseAutomation):
                 return True
             role_name=result.stdout.strip()
             policy_document={
-                "Version": "2012-10-17",
-                "Statement": [{
-                    "Effect": "Allow",
-                    "Action": ["ec2:*", "sagemaker:*", "iam:PassRole", "logs:*", "s3:*"],
-                    "Resource": "*"
+                "Version":"2012-10-17",
+                "Statement":[{
+                    "Effect":"Allow",
+                    "Action":["ec2:*", "sagemaker:*", "iam:PassRole", "logs:*", "s3:*"],
+                    "Resource":"*"
                 }]
             }
             result=subprocess.run([
@@ -181,10 +181,10 @@ class SageMakerTestAgent(BaseAutomation):
                 self.logger.info("✅ Set SAGEMAKER_ROLE_ARN")
             return True
         except Exception as e:
-            self.logger.warning(f"⚠️ IAM setup failed: {e}")
+            self.logger.warning(f"⚠️ IAM setup failed:{e}")
             return True
 
-    def setup_test_environment(self, container_type: str) -> bool:
+    def setup_test_environment(self, container_type:str) -> bool:
         """Setup test environment"""
         test_dir=self.repo_dir / f"test/sagemaker_tests/autogluon/{container_type}"
         try:
@@ -200,10 +200,10 @@ class SageMakerTestAgent(BaseAutomation):
             self.logger.info(f"✅ Setup complete for {container_type}")
             return True
         except Exception as e:
-            self.logger.error(f"❌ Setup failed: {e}")
+            self.logger.error(f"❌ Setup failed:{e}")
             return False
 
-    def run_sagemaker_test(self, image_uri: str, container_type: str) -> Tuple[bool, str]:
+    def run_sagemaker_test(self, image_uri:str, container_type:str) -> Tuple[bool, str]:
         """Run SageMaker test for a specific image"""
         tag=image_uri.split(':')[-1]
         processor='cpu' if '-cpu-' in tag else 'gpu'
@@ -224,14 +224,14 @@ class SageMakerTestAgent(BaseAutomation):
             result=subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
             success=result.returncode == 0
             output=result.stdout + result.stderr
-            self.logger.info(f"📊 Test {'PASSED' if success else 'FAILED'}: {image_uri.split('/')[-1]}")
+            self.logger.info(f"📊 Test {'PASSED' if success else 'FAILED'}:{image_uri.split('/')[-1]}")
             return success, output
         except subprocess.TimeoutExpired:
             return False, "Test execution timed out after 30 minutes"
         except Exception as e:
-            return False, f"Test execution error: {str(e)}"
+            return False, f"Test execution error:{str(e)}"
 
-    def filter_errors_only(self, test_output: str) -> str:
+    def filter_errors_only(self, test_output:str) -> str:
         """Filter test output to contain only errors, removing warnings"""
         lines=test_output.split('\n')
         error_lines=[]
@@ -246,7 +246,7 @@ class SageMakerTestAgent(BaseAutomation):
                 error_lines.append(line)
         return '\n'.join(error_lines)
 
-    def apply_fixes(self, fix_plan: Dict, test_directory: str) -> bool:
+    def apply_fixes(self, fix_plan:Dict, test_directory:str) -> bool:
         """Apply all fixes from Claude's plan"""
         fixes_applied=False
         for fix in fix_plan.get('code_fixes', []):
@@ -259,7 +259,7 @@ class SageMakerTestAgent(BaseAutomation):
                     with open(file_path, 'w') as f:
                         f.write(fix.get('new_content', ''))
                     fixes_applied=True
-                    self.logger.info(f"✅ Modified: {file_path.name}")
+                    self.logger.info(f"✅ Modified:{file_path.name}")
         for fix in fix_plan.get('config_fixes', []):
             if fix.get('type') == 'config_change':
                 os.environ[fix.get('setting', '')]=fix.get('value', '')
@@ -273,9 +273,9 @@ class SageMakerTestAgent(BaseAutomation):
                 try:
                     subprocess.run(["pip3", "install", package_spec], check=True)
                     fixes_applied=True
-                    self.logger.info(f"✅ Installed: {package}")
+                    self.logger.info(f"✅ Installed:{package}")
                 except subprocess.CalledProcessError:
-                    self.logger.warning(f"⚠️ Could not install: {package}")
+                    self.logger.warning(f"⚠️ Could not install:{package}")
         return fixes_applied
 
     def run_sagemaker_test_agent(self) -> bool:
@@ -291,7 +291,7 @@ class SageMakerTestAgent(BaseAutomation):
                     overall_success=False
                     continue
                 for image_uri in images:
-                    self.logger.info(f"🎯 Testing: {image_uri.split('/')[-1]}")
+                    self.logger.info(f"🎯 Testing:{image_uri.split('/')[-1]}")
                     max_retries=3
                     test_passed=False
                     for retry in range(max_retries):
@@ -305,13 +305,13 @@ class SageMakerTestAgent(BaseAutomation):
                             break
                         self.logger.info(f"❌ Found errors (attempt {retry + 1}/{max_retries})")
                         try:
-                            tag_info={"tag": image_uri.split(':')[-1]}
+                            tag_info={"tag":image_uri.split(':')[-1]}
                             fix_plan=self.chain.invoke({
-                                "container_type": container_type,
-                                "image_tag": tag_info['tag'],
-                                "framework_version": self.current_version,
-                                "test_output": error_output,
-                                "test_directory": os.getcwd()
+                                "container_type":container_type,
+                                "image_tag":tag_info['tag'],
+                                "framework_version":self.current_version,
+                                "test_output":error_output,
+                                "test_directory":os.getcwd()
                             })
                             if self.apply_fixes(fix_plan, os.getcwd()):
                                 self.logger.info(f"✅ Applied Claude's fixes, retrying...")
@@ -320,7 +320,7 @@ class SageMakerTestAgent(BaseAutomation):
                                 self.logger.warning("⚠️ No fixes applied")
                                 break
                         except Exception as e:
-                            self.logger.error(f"❌ Claude analysis failed: {e}")
+                            self.logger.error(f"❌ Claude analysis failed:{e}")
                             break
                     if not test_passed:
                         overall_success=False
@@ -329,7 +329,7 @@ class SageMakerTestAgent(BaseAutomation):
             self.print_test_summary()
             return overall_success
         except Exception as e:
-            self.logger.error(f"❌ SageMaker Test Agent failed: {e}")
+            self.logger.error(f"❌ SageMaker Test Agent failed:{e}")
             return False
         finally:
             os.chdir(original_dir)
@@ -341,7 +341,7 @@ class SageMakerTestAgent(BaseAutomation):
         print("="*70)
         passed=[uri for uri, passed in self.test_results.items() if passed]
         failed=[uri for uri, passed in self.test_results.items() if not passed]
-        print(f"📊 Total: {len(self.test_results)} | ✅ Passed: {len(passed)} | ❌ Failed: {len(failed)}")
+        print(f"📊 Total:{len(self.test_results)} | ✅ Passed:{len(passed)} | ❌ Failed:{len(failed)}")
         if failed:
             print("\n❌ Failed tests:")
             for uri in failed:
