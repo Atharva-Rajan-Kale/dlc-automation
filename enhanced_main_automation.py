@@ -593,11 +593,12 @@ def main():
         )
         success = all(results.values())
     else:
-        print("🔧 Running full agentic pipeline...")
+        # Default full pipeline now includes PR creation automatically
+        print("🔧 Running full agentic pipeline with PR creation...")
         results = automation.run_automation_with_agentic_pr(
             enable_pip_check=True, 
             enable_sagemaker_tests=True,
-            create_pr=args.create_pr
+            create_pr=True  # Changed from args.create_pr to True
         )
         success = all(results.values())
     automation.print_enhanced_summary(None)
