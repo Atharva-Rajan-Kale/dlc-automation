@@ -517,7 +517,8 @@ def main():
     parser.add_argument('--steps-125', action='store_true', help='Run steps 1, 2, and 5')
     parser.add_argument('--steps-34', action='store_true', help='Run steps 3 and 4')
     parser.add_argument('--steps-both', action='store_true', help='Run both: steps 1,2,5 and 3,4')
-    parser.add_argument('--step-6', action='store_true', help='Run step 6 (or all steps 1-6)')
+    parser.add_argument('--step-6', action='store_true', help='Run all steps 1-6')
+    parser.add_argument('--step-6-only', action='store_true', help='Run only step 6')
     parser.add_argument('--pip-check', action='store_true', help='Run pip check (or all steps + pip check)')
     parser.add_argument('--sagemaker', action='store_true', help='Run SageMaker tests (or all steps + pip check + sagemaker)')
     
@@ -568,6 +569,10 @@ def main():
         results_125 = automation.run_steps_1_2_5()
         results_34 = automation.run_steps_3_4()
         success = all(results_125.values()) and all(results_34.values())
+    elif args.step_6_only:
+        print("🔧 Running only step 6...")
+        results = automation.run_step_6()
+        success = all(results.values())
     elif args.step_6:
         print("🔧 Running all steps 1-6...")
         results = automation.run_automation_with_agentic_pr(
@@ -593,11 +598,12 @@ def main():
         )
         success = all(results.values())
     else:
-        print("🔧 Running full agentic pipeline...")
+        # Default full pipeline now includes PR creation automatically
+        print("🔧 Running full agentic pipeline with PR creation...")
         results = automation.run_automation_with_agentic_pr(
             enable_pip_check=True, 
             enable_sagemaker_tests=True,
-            create_pr=args.create_pr
+            create_pr=True  # Changed from args.create_pr to True
         )
         success = all(results.values())
     automation.print_enhanced_summary(None)
