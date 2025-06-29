@@ -258,32 +258,142 @@ class Steps34Automation(BaseAutomation):
                 self.logger.warning(f"No CUDA directory found in {py3_dir}")
 
     def update_single_dockerfile(self, dockerfile_path: Path, new_image_uri: str, image_type: str):
-        """Update a single Dockerfile with new FROM statement and AUTOGLUON_VERSION"""
+        """Update a single Dockerfile with new FROM statement and AUTOGLUON_VERSION, 
+        removing additional dependencies after autogluon installation"""
         try:
             with open(dockerfile_path, 'r') as f:
-                content=f.read()
-            original_content=content
-            content=re.sub(
-                r'^FROM\s+.*$',
-                f'FROM {new_image_uri}',
-                content,
-                flags=re.MULTILINE
-            )
-            content=re.sub(
-                r'AUTOGLUON_VERSION=[\d.]+',
-                f'AUTOGLUON_VERSION={self.current_version}',
-                content
-            )
-            if content != original_content:
+                lines = f.readlines()
+            
+            original_content = ''.join(lines)
+            updated_lines = []
+            i = 0
+            
+            while i < len(lines):
+                line = lines[i]
+                
+                # Update FROM statement
+                if line.strip().startswith('FROM '):
+                    updated_lines.append(f'FROM {new_image_uri}\n')
+                    i += 1
+                    continue
+                
+                # Update AUTOGLUON_VERSION
+                if 'AUTOGLUON_VERSION=' in line:
+                    line = re.sub(r'AUTOGLUON_VERSION=[\d.]+', f'AUTOGLUON_VERSION={self.current_version}', line)
+                
+                # Handle RUN blocks containing autogluon installation
+                if line.strip().startswith('RUN ') and self._contains_autogluon_install(lines, i):
+                    # Process this RUN block specially
+                    run_block_result = self._process_autogluon_run_block(lines, i)
+                    updated_lines.extend(run_block_result['processed_lines'])
+                    i = run_block_result['next_index']
+                    continue
+                
+                updated_lines.append(line)
+                i += 1
+            
+            new_content = ''.join(updated_lines)
+            
+            if new_content != original_content:
                 with open(dockerfile_path, 'w') as f:
-                    f.write(content)
+                    f.write(new_content)
                 self.logger.info(f"✅ Updated {image_type} Dockerfile: {dockerfile_path.relative_to(Path('.'))}")
                 self.logger.info(f"   FROM: {new_image_uri}")
+                self.logger.info(f"   AUTOGLUON_VERSION: {self.current_version}")
+                self.logger.info(f"   Removed additional dependencies after autogluon installation")
             else:
                 self.logger.info(f"ℹ️  No changes needed for {dockerfile_path.relative_to(Path('.'))}")
+                
         except Exception as e:
             self.logger.error(f"❌ Failed to update {dockerfile_path}: {e}")
 
+    def _contains_autogluon_install(self, lines, start_index):
+        """Check if a RUN block contains autogluon installation"""
+        i = start_index
+        while i < len(lines):
+            line = lines[i].strip()
+            if 'autogluon==${AUTOGLUON_VERSION}' in line or 'autogluon==' in line:
+                return True
+            # If we hit a line that doesn't continue the RUN command, stop looking
+            if line and not line.startswith('&&') and not line.endswith('\\') and not line.startswith('#') and i > start_index:
+                break
+            i += 1
+        return False
+
+    def _process_autogluon_run_block(self, lines, start_index):
+        """Process a RUN block containing autogluon, keeping only content up to autogluon install"""
+        processed_lines = []
+        i = start_index
+        found_autogluon = False
+        
+        while i < len(lines):
+            line = lines[i]
+            stripped_line = line.strip()
+            
+            # Add the line by default
+            should_add_line = True
+            
+            # Check if this line contains the autogluon installation
+            if ('autogluon==${AUTOGLUON_VERSION}' in line or 'autogluon==' in line) and 'pip install' in line:
+                found_autogluon = True
+                # Remove continuation character since we're ending the RUN block here
+                if line.rstrip().endswith(' \\'):
+                    line = line.rstrip().rstrip('\\').rstrip() + '\n'
+                elif line.rstrip().endswith('\\'):
+                    line = line.rstrip().rstrip('\\') + '\n'
+            
+            # After finding autogluon, skip all subsequent pip install lines and comments until RUN block ends
+            elif found_autogluon:
+                # Skip comment lines
+                if stripped_line.startswith('#'):
+                    should_add_line = False
+                # Skip pip install lines that come after autogluon
+                elif 'pip install' in stripped_line and (stripped_line.startswith('&&') or stripped_line.startswith('# ')):
+                    should_add_line = False
+                # Skip continuation lines that are part of pip install commands we're removing
+                elif stripped_line.startswith('&&') and 'pip install' in stripped_line:
+                    should_add_line = False
+                # If this line doesn't continue the RUN command, we've reached the end of the RUN block
+                elif (stripped_line and not stripped_line.startswith('&&') and 
+                    not stripped_line.startswith('#') and not stripped_line.endswith('\\') and 
+                    not stripped_line == ''):
+                    # This line starts a new command, add it and break
+                    processed_lines.append(line)
+                    i += 1
+                    break
+            
+            if should_add_line:
+                processed_lines.append(line)
+            
+            i += 1
+            
+            # If we've processed the autogluon line and cleaned up the RUN block, check if we should continue
+            if found_autogluon and not line.rstrip().endswith('\\'):
+                # Look ahead to see if there are more lines in this RUN block
+                continue_run_block = False
+                j = i
+                while j < len(lines):
+                    next_line = lines[j].strip()
+                    if not next_line:  # Empty line
+                        j += 1
+                        continue
+                    elif next_line.startswith('#'):  # Comment line
+                        j += 1
+                        continue
+                    elif next_line.startswith('&&'):  # Continuation of RUN block
+                        continue_run_block = True
+                        break
+                    else:  # New command
+                        break
+                
+                if not continue_run_block:
+                    break
+        
+        return {
+            'processed_lines': processed_lines,
+            'next_index': i
+        }
+    
     def run_steps(self, steps_only=None):
         """Run steps 3 and 4"""
         results={}
