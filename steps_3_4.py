@@ -4,12 +4,15 @@ import shutil
 from pathlib import Path
 from typing import Dict, Optional
 from common import BaseAutomation, ECRImageSelector
-class Steps34Automation(BaseAutomation):
+from automation_logger import LoggerMixin
+
+class Steps34Automation(BaseAutomation,LoggerMixin):
     """Handles Steps 3 and 4: Docker resources and Buildspec updates"""
     
     def __init__(self, current_version: str, previous_version: str, fork_url: str):
         super().__init__(current_version, previous_version, fork_url)
         self.selected_images=None
+        self.setup_logging(current_version,custom_name="steps_3_4")
     
     def step3_create_docker_resources(self):
         """Step 3: Create new release docker resources"""
@@ -311,7 +314,7 @@ class Steps34Automation(BaseAutomation):
                 self.logger.warning(f"No CUDA directory found in {py3_dir}")
 
     def update_single_dockerfile(self, dockerfile_path: Path, new_image_uri: str, image_type: str):
-        """Update a single Dockerfile with new FROM statement and AUTOGLUON_VERSION, 
+        """Update a single Dockerfile with FROM statement and AUTOGLUON_VERSION, 
         removing additional dependencies after autogluon installation"""
         try:
             with open(dockerfile_path, 'r') as f:
@@ -367,7 +370,6 @@ class Steps34Automation(BaseAutomation):
             line = lines[i].strip()
             if 'autogluon==${AUTOGLUON_VERSION}' in line or 'autogluon==' in line:
                 return True
-            # If we hit a line that doesn't continue the RUN command, stop looking
             if line and not line.startswith('&&') and not line.endswith('\\') and not line.startswith('#') and i > start_index:
                 break
             i += 1
@@ -382,14 +384,11 @@ class Steps34Automation(BaseAutomation):
         while i < len(lines):
             line = lines[i]
             stripped_line = line.strip()
-            
-            # Add the line by default
             should_add_line = True
             
             # Check if this line contains the autogluon installation
             if ('autogluon==${AUTOGLUON_VERSION}' in line or 'autogluon==' in line) and 'pip install' in line:
                 found_autogluon = True
-                # Remove continuation character since we're ending the RUN block here
                 if line.rstrip().endswith(' \\'):
                     line = line.rstrip().rstrip('\\').rstrip() + '\n'
                 elif line.rstrip().endswith('\\'):
@@ -397,20 +396,15 @@ class Steps34Automation(BaseAutomation):
             
             # After finding autogluon, skip all subsequent pip install lines and comments until RUN block ends
             elif found_autogluon:
-                # Skip comment lines
                 if stripped_line.startswith('#'):
                     should_add_line = False
-                # Skip pip install lines that come after autogluon
                 elif 'pip install' in stripped_line and (stripped_line.startswith('&&') or stripped_line.startswith('# ')):
                     should_add_line = False
-                # Skip continuation lines that are part of pip install commands we're removing
                 elif stripped_line.startswith('&&') and 'pip install' in stripped_line:
                     should_add_line = False
-                # If this line doesn't continue the RUN command, we've reached the end of the RUN block
                 elif (stripped_line and not stripped_line.startswith('&&') and 
                     not stripped_line.startswith('#') and not stripped_line.endswith('\\') and 
                     not stripped_line == ''):
-                    # This line starts a new command, add it and break
                     processed_lines.append(line)
                     i += 1
                     break
@@ -419,24 +413,21 @@ class Steps34Automation(BaseAutomation):
                 processed_lines.append(line)
             
             i += 1
-            
-            # If we've processed the autogluon line and cleaned up the RUN block, check if we should continue
             if found_autogluon and not line.rstrip().endswith('\\'):
-                # Look ahead to see if there are more lines in this RUN block
                 continue_run_block = False
                 j = i
                 while j < len(lines):
                     next_line = lines[j].strip()
-                    if not next_line:  # Empty line
+                    if not next_line:
                         j += 1
                         continue
-                    elif next_line.startswith('#'):  # Comment line
+                    elif next_line.startswith('#'):
                         j += 1
                         continue
-                    elif next_line.startswith('&&'):  # Continuation of RUN block
+                    elif next_line.startswith('&&'):
                         continue_run_block = True
                         break
-                    else:  # New command
+                    else:
                         break
                 
                 if not continue_run_block:
