@@ -17,7 +17,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 from common import BaseAutomation
-
 class SecurityTestAgent(BaseAutomation):
     """Agentic system for automatically fixing security test failures"""
     
@@ -1579,6 +1578,8 @@ class SecurityTestAgent(BaseAutomation):
             if not pr_number:
                 self.logger.error("❌ No PR found, cannot access logs")
                 return False
+            
+            self.check_autogluon_test_failures(pr_number)
             # Get failing security tests
             failing_tests = self.get_failing_security_tests(pr_number)
             if not failing_tests:
@@ -2479,7 +2480,272 @@ class SecurityTestAgent(BaseAutomation):
         else:
             self.logger.error("❌ Failed to apply container-specific allowlist fixes")
             return False
+    def _is_autogluon_test(self, test_name: str) -> bool:
+        """Detect AutoGluon tests (excluding security tests)"""
+        test_name_lower = test_name.lower()
+        
+        # Skip security tests - we handle those separately
+        if self._is_security_test(test_name):
+            return False
+        
+        # AutoGluon test indicators
+        autogluon_indicators = [
+            'autogluon',
+            'ag-',
+            'test_autogluon',
+            'autogluon-training',
+            'autogluon-inference'
+        ]
+        
+        for indicator in autogluon_indicators:
+            if indicator in test_name_lower:
+                return True
+        
+        return False
 
+    def get_failing_autogluon_tests(self, pr_number: int) -> List[Dict]:
+        """Get failing AutoGluon tests (excluding security tests)"""
+        try:
+            all_tests = self.get_all_tests_for_pr(pr_number)
+            
+            failing_autogluon_tests = []
+            for test in all_tests:
+                # Check if test is AutoGluon-related and failing
+                is_autogluon = self._is_autogluon_test(test['name'])
+                is_failing = (
+                    test.get('status') == 'failure' or 
+                    test.get('conclusion') == 'failure' or
+                    test.get('state') in ['FAILURE', 'ERROR', 'failure', 'error']
+                )
+                
+                if is_autogluon and is_failing:
+                    failing_autogluon_tests.append({
+                        'name': test['name'],
+                        'check_run_id': test.get('check_run_id'),
+                        'url': test.get('url', ''),
+                        'details_url': test.get('details_url', ''),
+                        'source': test.get('source', 'unknown')
+                    })
+            
+            self.logger.info(f"🔍 Found {len(failing_autogluon_tests)} failing AutoGluon tests")
+            for test in failing_autogluon_tests:
+                self.logger.info(f"   - {test['name']} (source: {test.get('source', 'unknown')})")
+            
+            return failing_autogluon_tests
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to get failing AutoGluon tests: {e}")
+            return []
+
+    def get_all_tests_for_pr(self, pr_number: int) -> List[Dict]:
+        """Get all tests for PR (similar to get_all_security_tests but for all tests)"""
+        try:
+            # Get PR details
+            pr_url = f"https://api.github.com/repos/aws/deep-learning-containers/pulls/{pr_number}"
+            headers = {
+                "Authorization": f"Bearer {self.github_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28"
+            }
+            response = requests.get(pr_url, headers=headers)
+            response.raise_for_status()
+            pr_data = response.json()
+            head_sha = pr_data['head']['sha']
+            
+            all_tests = []
+            
+            # Get tests via GraphQL
+            graphql_tests = self._get_graphql_tests_for_commit(pr_number, head_sha)
+            for test in graphql_tests:
+                # Map GraphQL status to our format
+                if test['state'] == 'SUCCESS':
+                    mapped_status = 'success'
+                elif test['state'] in ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT']:
+                    mapped_status = 'failure'
+                elif test['state'] == 'PENDING':
+                    mapped_status = 'pending'
+                else:
+                    mapped_status = test['state'].lower()
+                
+                all_tests.append({
+                    'name': test['name'],
+                    'check_run_id': test.get('check_run_id'),
+                    'status': mapped_status,
+                    'state': test['state'],
+                    'url': test.get('url', ''),
+                    'details_url': test.get('details_url', ''),
+                    'source': 'GraphQL'
+                })
+            
+            return all_tests
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to get all tests: {e}")
+            return []
+
+    def setup_failure_analysis_chain(self):
+        """Setup AI chain for analyzing test failure logs"""
+        self.failure_analysis_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a test failure analysis AI. Your job is to analyze test failure logs and extract the root cause of failures.
+
+    TASK: Analyze the test failure logs and identify what's causing the test to fail.
+
+    INSTRUCTIONS:
+    1. Look for the "Failures" section in the logs
+    2. Extract the most relevant error messages, stack traces, and failure reasons
+    3. Identify the root cause (e.g., import errors, assertion failures, timeout issues, dependency conflicts)
+    4. Provide a concise summary of what went wrong
+    5. If possible, suggest what type of fix might be needed
+
+    FOCUS ON:
+    - Error messages and exceptions
+    - Failed assertions
+    - Import/dependency issues
+    - Timeout or resource issues
+    - Configuration problems
+    - Environment setup issues
+
+    OUTPUT FORMAT:
+    Return a JSON object with:
+    {{
+        "root_cause": "Brief description of the main issue",
+        "error_type": "import_error|assertion_failure|timeout|dependency_conflict|config_issue|other",
+        "key_errors": ["list", "of", "key", "error", "messages"],
+        "suggested_fix_type": "Brief suggestion for fix type",
+        "failure_section": "Extracted relevant failure content"
+    }}
+
+    Only analyze the failure content, don't try to fix the issues."""),
+            ("human", """Test Name: {test_name}
+
+    Test Failure Logs:
+    {failure_logs}
+
+    Analyze the failure and extract the root cause:""")
+        ])
+        
+        self.failure_analysis_chain = self.failure_analysis_prompt | self.llm | JsonOutputParser()
+
+    def extract_failure_logs_from_test(self, test_name: str, test_url: str) -> str:
+        """Extract failure logs from test URL, focusing on Failures section"""
+        try:
+            self.logger.info(f"🔍 Extracting failure logs for {test_name}")
+            logs = self.get_logs_from_test_url(test_url, test_name)
+            if not logs:
+                return ""
+            failure_extraction_prompt = ChatPromptTemplate.from_messages([
+                ("system", """Extract the Failures section from test logs. Look for content between "Failures" and "Passes" sections, or similar failure indicators. Return only the relevant failure content without the surrounding log noise."""),
+                ("human", """Test logs:
+    {logs}
+
+    Extract the failures section:""")
+            ])
+            
+            try:
+                failure_chain = failure_extraction_prompt | self.llm
+                failure_content = failure_chain.invoke({"logs": logs[:50000]})
+                
+                if failure_content and len(str(failure_content).strip()) > 10:
+                    self.logger.info(f"✅ Extracted failure content for {test_name} ({len(str(failure_content))} chars)")
+                    return str(failure_content)
+                else:
+                    self.logger.warning(f"⚠️ AI extraction returned minimal content for {test_name}")
+                    return logs[:10000] 
+                    
+            except Exception as e:
+                self.logger.warning(f"⚠️ AI failure extraction failed for {test_name}: {e}")
+                return logs[:10000] 
+                
+        except Exception as e:
+            self.logger.error(f"❌ Failed to extract failure logs for {test_name}: {e}")
+            return ""
+
+    def analyze_autogluon_test_failures(self, failing_tests: List[Dict]) -> Dict:
+        """Analyze AutoGluon test failures using AI"""
+        if not hasattr(self, 'failure_analysis_chain'):
+            self.setup_failure_analysis_chain()
+        
+        self.logger.info(f"🤖 Analyzing {len(failing_tests)} AutoGluon test failures...")
+        
+        analysis_results = {}
+        
+        for test in failing_tests:
+            test_name = test['name']
+            self.logger.info(f"🔍 Analyzing failure: {test_name}")
+            
+            # Extract failure logs
+            failure_logs = ""
+            if test.get('url'):
+                failure_logs = self.extract_failure_logs_from_test(test_name, test['url'])
+            if not failure_logs and test.get('details_url'):
+                failure_logs = self.extract_failure_logs_from_test(test_name, test['details_url'])
+            
+            if not failure_logs:
+                self.logger.warning(f"⚠️ No failure logs found for {test_name}")
+                continue
+            
+            try:
+                # Use AI to analyze the failure
+                analysis = self.failure_analysis_chain.invoke({
+                    "test_name": test_name,
+                    "failure_logs": failure_logs[:30000]  # Limit for AI processing
+                })
+                
+                if isinstance(analysis, dict):
+                    analysis_results[test_name] = analysis
+                    self.logger.info(f"✅ Analyzed {test_name}: {analysis.get('root_cause', 'Unknown cause')}")
+                else:
+                    self.logger.warning(f"⚠️ AI returned invalid analysis for {test_name}")
+                    
+            except Exception as e:
+                self.logger.error(f"❌ Failed to analyze {test_name}: {e}")
+                continue
+        if analysis_results:
+            self.logger.info("="*80)
+            self.logger.info("🔍 AUTOGLUON TEST FAILURE ANALYSIS SUMMARY")
+            self.logger.info("="*80)
+            
+            error_types = {}
+            for test_name, analysis in analysis_results.items():
+                error_type = analysis.get('error_type', 'unknown')
+                if error_type not in error_types:
+                    error_types[error_type] = []
+                error_types[error_type].append(test_name)
+                
+                self.logger.info(f"📋 {test_name}:")
+                self.logger.info(f"   Root Cause: {analysis.get('root_cause', 'Unknown')}")
+                self.logger.info(f"   Error Type: {analysis.get('error_type', 'unknown')}")
+                self.logger.info(f"   Suggested Fix: {analysis.get('suggested_fix_type', 'Unknown')}")
+                if analysis.get('key_errors'):
+                    self.logger.info(f"   Key Errors: {', '.join(analysis['key_errors'][:3])}")
+            
+            self.logger.info("\n📊 Error Type Summary:")
+            for error_type, tests in error_types.items():
+                self.logger.info(f"   {error_type}: {len(tests)} tests")
+            
+            self.logger.info("="*80)
+        
+        return analysis_results
+
+    def check_autogluon_test_failures(self, pr_number: int) -> bool:
+        """Check for AutoGluon test failures and analyze them"""
+        self.logger.info("🔍 Checking for AutoGluon test failures...")
+        
+        failing_autogluon_tests = self.get_failing_autogluon_tests(pr_number)
+        
+        if not failing_autogluon_tests:
+            self.logger.info("✅ No failing AutoGluon tests found!")
+            return True
+        
+        # Analyze the failures
+        failure_analysis = self.analyze_autogluon_test_failures(failing_autogluon_tests)
+        
+        if failure_analysis:
+            self.logger.warning(f"⚠️ Found {len(failing_autogluon_tests)} failing AutoGluon tests")
+            self.logger.info("ℹ️ AutoGluon test failures detected but not blocking security analysis")
+            return True 
+        
+        return True
 def main():
     """Main function for Security Test Agent"""
     import argparse

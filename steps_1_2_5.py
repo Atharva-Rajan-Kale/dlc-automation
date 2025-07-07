@@ -4,10 +4,12 @@ import shutil
 import subprocess
 from pathlib import Path
 from common import BaseAutomation
-
 class Steps125Automation(BaseAutomation):
     """Handles Steps 1, 2, and 5:Branch creation, TOML update, and Package model"""
     
+    def __init__(self, current_version: str, previous_version: str, fork_url: str):
+        super().__init__(current_version, previous_version, fork_url)
+
     def step1_create_branch(self):
         """Step 1:Cut a new branch in fork to work on a new release"""
         self.logger.info("Step 1:Creating release branch")

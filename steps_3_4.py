@@ -4,7 +4,6 @@ import shutil
 from pathlib import Path
 from typing import Dict, Optional
 from common import BaseAutomation, ECRImageSelector
-
 class Steps34Automation(BaseAutomation):
     """Handles Steps 3 and 4: Docker resources and Buildspec updates"""
     
@@ -78,8 +77,8 @@ class Steps34Automation(BaseAutomation):
             
             training_success=self.update_buildspec("training", image_info)
             inference_success=self.update_buildspec("inference", image_info)
-            
-            if training_success and inference_success:
+            conftest_success=self.update_conftest_py_version(image_info)
+            if training_success and inference_success and conftest_success:
                 self.logger.info("✅ Step 4 completed: Buildspec files updated (not committed)")
                 return True
             else:
@@ -90,15 +89,15 @@ class Steps34Automation(BaseAutomation):
             return False
         finally:
             os.chdir(original_dir)
-
+    
     def extract_buildspec_info_from_images(self):
         """Extract version info from selected images for buildspec updates"""
         sample_image=self.selected_images['training_cpu']
         self.logger.info(f"Extracting info from sample image tag: {sample_image.tag}")
         python_match=re.search(r'-py(\d+)-', sample_image.tag)
-        python_version=f"py{python_match.group(1)}" if python_match else "py311"
+        python_version=f"py{python_match.group(1)}"
         os_match=re.search(r'ubuntu(\d+\.\d+)', sample_image.tag)
-        os_version=f"ubuntu{os_match.group(1)}" if os_match else "ubuntu22.04"
+        os_version=f"ubuntu{os_match.group(1)}"
         cuda_version=self.selected_images['cuda_version']
         pytorch_version=self.selected_images['pytorch_version']
         return {
@@ -107,7 +106,61 @@ class Steps34Automation(BaseAutomation):
             'cuda_version': cuda_version,
             'pytorch_version': pytorch_version
         }
-
+    
+    def update_conftest_py_version(self, image_info):
+        """Update conftest.py with the extracted python version"""
+        conftest_path = Path("test/sagemaker_tests/autogluon/inference/conftest.py")
+        if not conftest_path.exists():
+            self.logger.error(f"Conftest file not found: {conftest_path}")
+            return False
+        self.logger.info(f"Updating conftest.py: {conftest_path}")
+        # Extract numeric python version (remove 'py' prefix)
+        python_version_numeric = image_info['python_version'][2:]
+        self.logger.info(f"Updating conftest.py with python version: {python_version_numeric}")
+        try:
+            with open(conftest_path, 'r') as f:
+                content = f.read()
+            original_content = content
+            # Extract current choices and update them if needed
+            choices_pattern = r'choices=\[([^\]]+)\]'
+            choices_match = re.search(choices_pattern, content)
+            if choices_match:
+                # Parse current choices
+                choices_str = choices_match.group(1)
+                current_choices = [choice.strip().strip('"\'') for choice in choices_str.split(',')]
+                self.logger.info(f"Current choices: {current_choices}")
+                # Check if current version is different from last choice
+                if current_choices and current_choices[-1] != python_version_numeric:
+                    # Remove first and append current version
+                    new_choices = current_choices[1:] + [python_version_numeric]
+                    self.logger.info(f"Updated choices: {new_choices} (removed first, added {python_version_numeric})")
+                else:
+                    new_choices = current_choices
+                    self.logger.info(f"No changes to choices needed (current version {python_version_numeric} matches last choice)")
+            else:
+                if new_choices[-1] != python_version_numeric:
+                    new_choices = new_choices[1:] + [python_version_numeric]
+                self.logger.info(f"No existing choices found, using: {new_choices}")
+            choices_formatted = ', '.join([f'"{choice}"' for choice in new_choices])
+            # Update the parser.addoption line with new choices and default
+            pattern = r'parser\.addoption\("--py-version",\s*choices=\[.*?\],\s*default=".*?"\)'
+            replacement = f'parser.addoption("--py-version", choices=[{choices_formatted}], default="{python_version_numeric}")'
+            # Update the content
+            updated_content = re.sub(pattern, replacement, content)
+            if updated_content != original_content:
+                with open(conftest_path, 'w') as f:
+                    f.write(updated_content)
+                self.logger.info(f"✅ Successfully updated {conftest_path}")
+                self.logger.info(f"   📋 Updated choices to: {new_choices}")
+                self.logger.info(f"   📋 Updated python version default to: {python_version_numeric}")
+                return True
+            else:
+                self.logger.info(f"ℹ️  No changes needed for {conftest_path}")
+                return True
+        except Exception as e:
+            self.logger.error(f"❌ Failed to update {conftest_path}: {e}")
+            return False
+        
     def update_buildspec(self, container_type, image_info):
         """Update buildspec.yml for training or inference"""
         buildspec_path=Path(f"autogluon/{container_type}/buildspec.yml")
