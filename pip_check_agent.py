@@ -17,6 +17,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 
 from common import BaseAutomation, ECRImageSelector
+from automation_logger import LoggerMixin
 
 @dataclass
 class DependencyConflict:
@@ -30,7 +31,7 @@ class PipConflictAnalysis(BaseModel):
     conflicts: List[Dict] = Field(description="List of parsed dependency conflicts")
     conflict_groups: Dict[str, List[Dict]] = Field(description="Conflicts grouped by type")
 
-class PipCheckAgent(BaseAutomation):
+class PipCheckAgent(BaseAutomation,LoggerMixin):
     """Agentic system for automatically fixing pip check issues on a single image"""
     
     def __init__(self, current_version: str, previous_version: str, fork_url: str):
@@ -49,6 +50,7 @@ class PipCheckAgent(BaseAutomation):
         self.failed_platform_fixes = set()
         # Track last AI usage time to avoid throttling
         self.last_ai_usage_time = 0
+        self.setup_logging(current_version,custom_name="pip_check")
 
     def wait_for_ai_throttling(self):
         """Wait 3 minutes between AI calls to avoid throttling"""
@@ -237,7 +239,7 @@ class PipCheckAgent(BaseAutomation):
         for method in methods:
             try:
                 self.logger.info(f"🧪 Trying {method['name']} (timeout: {timeout}s)")
-                result = subprocess.run(
+                result = self.run_subprocess_with_logging(
                     method['cmd'], 
                     capture_output=True, 
                     text=True, 
@@ -408,7 +410,7 @@ class PipCheckAgent(BaseAutomation):
             
             self.logger.info(f"🔍 Running command: pip install pipdeptree && pip install --dry-run '{constraint}'")
             
-            result = subprocess.run(
+            result = self.run_subprocess_with_logging(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -1141,7 +1143,7 @@ class PipCheckAgent(BaseAutomation):
         for method in methods:
             try:
                 self.logger.info(f"🧪 Trying {method['name']} (timeout: 10s)")
-                result = subprocess.run(
+                result = self.run_subprocess_with_logging(
                     method['cmd'], 
                     capture_output=True, 
                     text=True, 

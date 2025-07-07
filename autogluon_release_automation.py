@@ -11,7 +11,9 @@ from datetime import datetime
 sys.path.append(str(Path(__file__).parent))
 from common import BaseAutomation, ECRImageSelector
 from github_pr_automation import GitHubPRAutomation
-class AutoGluonReleaseImagesAutomation(BaseAutomation):
+from automation_logger import LoggerMixin
+
+class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
     """
     Automation for updating release_images files and available_images.md with AutoGluon configuration
     """
@@ -29,6 +31,7 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation):
         self.original_training_content = None
         self.original_inference_content = None
         self.original_available_images_content = None
+        self.setup_logging(current_version,custom_name="autogluon_release")
 
     def prompt_user(self, question: str) -> bool:
         """Prompt user with a yes/no question and repeat until valid answer"""
@@ -541,10 +544,10 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation):
         try:
             original_dir = os.getcwd()
             os.chdir(self.repo_dir)
-            subprocess.run(['git', 'add', 'release_images_training.yml', 'release_images_inference.yml'], check=True)
-            subprocess.run(['git', 'commit', '-m', commit_message], check=True)
+            self.run_subprocess_with_logging(['git', 'add', 'release_images_training.yml', 'release_images_inference.yml'], check=True)
+            self.run_subprocess_with_logging(['git', 'commit', '-m', commit_message], check=True)
             branch_name = f"autogluon-{self.current_version}-release"
-            subprocess.run(['git', 'push', 'origin', branch_name], check=True)
+            self.run_subprocess_with_logging(['git', 'push', 'origin', branch_name], check=True)
             self.logger.info(f"✅ YAML changes committed and pushed: {commit_message}")
             return True
         except Exception as e:
@@ -560,14 +563,14 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation):
             os.chdir(self.repo_dir)
             
             # Add the modified available_images.md file
-            subprocess.run(['git', 'add', 'available_images.md'], check=True)
+            self.run_subprocess_with_logging(['git', 'add', 'available_images.md'], check=True)
             
             # Commit changes
-            subprocess.run(['git', 'commit', '-m', commit_message], check=True)
+            self.run_subprocess_with_logging(['git', 'commit', '-m', commit_message], check=True)
             
             # Push changes
             branch_name = f"autogluon-{self.current_version}-release"
-            subprocess.run(['git', 'push', 'origin', branch_name], check=True)
+            self.run_subprocess_with_logging(['git', 'push', 'origin', branch_name], check=True)
             self.logger.info(f"✅ available_images.md changes committed and pushed: {commit_message}")
             return True
         except Exception as e:

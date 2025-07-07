@@ -5,8 +5,9 @@ from pathlib import Path
 from typing import Dict, Optional
 import boto3
 from common import BaseAutomation
+from automation_logger import LoggerMixin
 
-class AutoGluonTestAgent(BaseAutomation):
+class AutoGluonTestAgent(BaseAutomation, LoggerMixin):
     """Simple test runner for AutoGluon tests on the most recent training CPU image"""
     
     def __init__(self, current_version: str, previous_version: str, fork_url: str):
@@ -31,6 +32,7 @@ class AutoGluonTestAgent(BaseAutomation):
                 "function": "test_ts"
             }
         ]
+        self.setup_logging(current_version,custom_name="autogluon_tests")
 
     def get_latest_training_cpu_image(self) -> Optional[str]:
         """Get the most recent training CPU image from beta-autogluon-training repository"""
@@ -149,7 +151,7 @@ class AutoGluonTestAgent(BaseAutomation):
         
         try:
             # Run with real-time output streaming
-            result = subprocess.run(
+            result = self.run_subprocess_with_logging(
                 docker_cmd,
                 capture_output=False
             )

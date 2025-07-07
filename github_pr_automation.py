@@ -6,8 +6,9 @@ import time
 from pathlib import Path
 from typing import Optional, Dict, List
 import logging
+from automation_logger import LoggerMixin
 
-class GitHubPRAutomation():
+class GitHubPRAutomation(LoggerMixin):
     """Handles automatic PR creation to upstream repository"""
     
     def __init__(self, current_version: str, fork_url: str, repo_dir: Path):
@@ -22,6 +23,7 @@ class GitHubPRAutomation():
             raise ValueError("Invalid GitHub fork URL format")
         self.upstream_owner = "aws"
         self.repo_name = "deep-learning-containers"
+        self.setup_logging(current_version,custom_name="github_pr")
         
     def get_github_token(self) -> Optional[str]:
         """Get GitHub token from environment or GitHub CLI"""
@@ -29,7 +31,7 @@ class GitHubPRAutomation():
         if token:
             return token
         try:
-            result = subprocess.run(
+            result = self.run_subprocess_with_logging(
                 ["gh", "auth", "token"], 
                 capture_output=True, 
                 text=True, 
@@ -46,21 +48,21 @@ class GitHubPRAutomation():
         original_dir = os.getcwd()
         try:
             os.chdir(self.repo_dir)
-            result = subprocess.run(
+            result = self.run_subprocess_with_logging(
                 ["black", "-l", "100", "."],
                 capture_output=True,
                 text=True
             )
             if result.returncode == 0:
                 self.logger.info("✅ Code formatting completed successfully")
-                result = subprocess.run(
+                result = self.run_subprocess_with_logging(
                     ["git", "diff", "--quiet"],
                     capture_output=True
                 )
                 if result.returncode != 0:  
                     self.logger.info("📝 Committing formatting changes...")
-                    subprocess.run(["git", "add", "."], check=True)
-                    subprocess.run([
+                    self.run_subprocess_with_logging(["git", "add", "."], check=True)
+                    self.run_subprocess_with_logging([
                         "git", "commit", "-m", 
                         f"Add Autogluon v{self.current_version}"
                     ], check=True)
@@ -86,10 +88,10 @@ class GitHubPRAutomation():
         original_dir = os.getcwd()
         try:
             os.chdir(self.repo_dir)
-            subprocess.run(["git", "checkout", self.branch_name], check=True)
+            self.run_subprocess_with_logging(["git", "checkout", self.branch_name], check=True)
             if not self.format_code_with_black():
                 self.logger.warning("⚠️ Code formatting failed, continuing with push...")
-            result = subprocess.run(
+            result = self.run_subprocess_with_logging(
                 ["git", "push", "origin", self.branch_name], 
                 capture_output=True, 
                 text=True
@@ -100,7 +102,7 @@ class GitHubPRAutomation():
             else:
                 if "already exists" in result.stderr:
                     self.logger.info(f"ℹ️ Branch {self.branch_name} already exists, force pushing...")
-                    subprocess.run(
+                    self.run_subprocess_with_logging(
                         ["git", "push", "--force", "origin", self.branch_name], 
                         check=True
                     )

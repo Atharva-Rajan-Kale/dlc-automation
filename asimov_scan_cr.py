@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Dict, Optional, List
 from datetime import datetime
 from botocore.exceptions import ClientError, NoCredentialsError
-
-class AsimovSecurityScanAutomation():
+from automation_logger import LoggerMixin
+class AsimovSecurityScanAutomation(LoggerMixin):
     """Automation for AsimovImageSecurityScan workspace and images.py updates"""
     
     def __init__(self, current_version: str, previous_version: str, fork_url: str):
@@ -35,7 +35,7 @@ class AsimovSecurityScanAutomation():
         self.script_dir = Path(__file__).parent.parent
         self.workspace_dir = self.script_dir / "AsimovImageSecurityScan"
         self.images_py_path = self.workspace_dir / "src" / "AsimovImageSecurityScan" / "src" / "asimov_image_security_scan" / "images.py"
-        
+        self.setup_logging(current_version,custom_name="asimov_scan")
     def setup_brazil_workspace(self) -> bool:
         """Set up the Brazil workspace"""
         try:
@@ -51,7 +51,7 @@ class AsimovSecurityScanAutomation():
             else:
                 # Create workspace
                 self.logger.info("📁 Creating Brazil workspace...")
-                result = subprocess.run(
+                result = self.run_subprocess_with_logging(
                     ["brazil", "ws", "create", "-n", "AsimovImageSecurityScan"],
                     "Creating Brazil workspace",
                     capture_output=False
@@ -63,7 +63,7 @@ class AsimovSecurityScanAutomation():
                 os.chdir(self.workspace_dir)
             # Use version set
             self.logger.info("📦 Setting up version set...")
-            result = subprocess.run(
+            result = self.run_subprocess_with_logging(
                 ["brazil", "ws", "use", "-vs", "AsimovPassiveScripts/mainline"],
                 "Setting up version set",
                 capture_output=False
@@ -73,7 +73,7 @@ class AsimovSecurityScanAutomation():
                 return False
             # Use package
             self.logger.info("📦 Setting up package...")
-            result = subprocess.run(
+            result = self.run_subprocess_with_logging(
                 ["brazil", "ws", "use", "-p", "AsimovImageSecurityScan"],
                 "Setting up package",
                 capture_output=False
@@ -83,7 +83,7 @@ class AsimovSecurityScanAutomation():
                 return False
             # Sync workspace
             self.logger.info("🔄 Syncing workspace to get latest changes...")
-            result = subprocess.run(
+            result = self.run_subprocess_with_logging(
                 ["brazil", "ws", "sync", "--md"],
                 "Syncing workspace",
                 capture_output=False
@@ -284,7 +284,7 @@ class AsimovSecurityScanAutomation():
             current_dir = os.getcwd()
             self.logger.info(f"📁 Current directory: {current_dir}")
             self.logger.info("💾 Committing changes...")
-            result = subprocess.run(
+            result = self.run_subprocess_with_logging(
                 ["git", "add", "."],
                 "Staging changes for commit",
                 capture_output=False
@@ -293,7 +293,7 @@ class AsimovSecurityScanAutomation():
                 self.logger.error(f"❌ Failed to stage changes")
                 return False
             commit_message = f"AutoGluon {self.current_version}: Update security scan images\n\nAdding AutoGluon {self.current_version} images for security scanning.\nShifting previous version {self.previous_version} to older position."
-            result = subprocess.run(
+            result = self.run_subprocess_with_logging(
                 ["git", "commit", "-m", commit_message],
                 "Committing changes",
                 capture_output=False
@@ -303,7 +303,7 @@ class AsimovSecurityScanAutomation():
                 return False
             self.logger.info("✅ Changes committed successfully")
             self.logger.info("📤 Sending CR...")
-            result = subprocess.run(
+            result = self.run_subprocess_with_logging(
                 ["cr"],
                 "Sending Code Review",
                 capture_output=False

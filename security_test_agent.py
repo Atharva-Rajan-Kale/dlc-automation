@@ -17,7 +17,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 from common import BaseAutomation
-class SecurityTestAgent(BaseAutomation):
+from automation_logger import LoggerMixin
+
+class SecurityTestAgent(BaseAutomation,LoggerMixin):
     """Agentic system for automatically fixing security test failures"""
     
     def __init__(self, current_version: str, previous_version: str, fork_url: str):
@@ -38,13 +40,14 @@ class SecurityTestAgent(BaseAutomation):
             'inference': {'os_vulnerabilities': [], 'py_vulnerabilities': []},
             'unknown': {'os_vulnerabilities': [], 'py_vulnerabilities': []}
         }
+        self.setup_logging(current_version,custom_name="security_test")
         
     def setup_github_credentials(self):
         """Setup GitHub credentials for API access"""
         self.github_token = os.environ.get('GITHUB_TOKEN')
         if not self.github_token:
             try:
-                result = subprocess.run(
+                result = self.run_subprocess_with_logging(
                     ["gh", "auth", "token"], 
                     capture_output=True, 
                     text=True, 
@@ -705,19 +708,19 @@ class SecurityTestAgent(BaseAutomation):
         try:
             os.chdir(self.repo_dir)
             # Check if there are changes
-            result = subprocess.run(["git", "diff", "--quiet"], capture_output=True)
+            result = self.run_subprocess_with_logging(["git", "diff", "--quiet"], capture_output=True)
             if result.returncode == 0:
                 self.logger.info("ℹ️ No changes to commit")
                 return True
             # Show what changes will be committed
             self.logger.info("📋 Changes to be committed:")
-            diff_result = subprocess.run(["git", "diff", "--name-only"], capture_output=True, text=True)
+            diff_result = self.run_subprocess_with_logging(["git", "diff", "--name-only"], capture_output=True, text=True)
             if diff_result.stdout:
                 for file in diff_result.stdout.strip().split('\n'):
                     self.logger.info(f"   📝 Modified: {file}")
             # Show a preview of the changes
             self.logger.info("\n📄 Preview of changes:")
-            diff_preview = subprocess.run(["git", "diff", "--stat"], capture_output=True, text=True)
+            diff_preview = self.run_subprocess_with_logging(["git", "diff", "--stat"], capture_output=True, text=True)
             if diff_preview.stdout:
                 for line in diff_preview.stdout.strip().split('\n'):
                     self.logger.info(f"   {line}")
@@ -744,9 +747,9 @@ class SecurityTestAgent(BaseAutomation):
                 except (EOFError, KeyboardInterrupt):
                     self.logger.info("\n❌ User interrupted - aborting commit and push")
                     return False
-            subprocess.run(["git", "add", "."], check=True)
-            subprocess.run(["git", "commit", "-m", commit_message], check=True)
-            subprocess.run(["git", "push", "origin", self.branch_name], check=True)
+            self.run_subprocess_with_logging(["git", "add", "."], check=True)
+            self.run_subprocess_with_logging(["git", "commit", "-m", commit_message], check=True)
+            self.run_subprocess_with_logging(["git", "push", "origin", self.branch_name], check=True)
             self.logger.info(f"✅ Successfully committed and pushed: {commit_message}")
             return True
         except Exception as e:
