@@ -14,7 +14,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 
 from common import BaseAutomation, ECRImageSelector
-
+from automation_logger import LoggerMixin
 @dataclass
 class TestError:
     error_type:str
@@ -31,7 +31,7 @@ class TestFixPlan(BaseModel):
     retry_strategy:str=Field(description="Strategy for retrying tests")
     estimated_success_rate:int=Field(description="Estimated success rate after fixes (0-100)")
 
-class SageMakerTestAgent(BaseAutomation):
+class SageMakerTestAgent(BaseAutomation,LoggerMixin):
     """Agentic system for automatically running and fixing SageMaker tests"""
     
     def __init__(self, current_version:str, previous_version:str, fork_url:str):
@@ -39,7 +39,8 @@ class SageMakerTestAgent(BaseAutomation):
         self.setup_bedrock_client()
         self.setup_langchain()
         self.test_results={}
-        
+        self.setup_logging(current_version,custom_name="sagemaker")
+
     def setup_bedrock_client(self):
         """Initialize Bedrock client"""
         self.bedrock_client=boto3.client(
@@ -133,7 +134,7 @@ class SageMakerTestAgent(BaseAutomation):
     def setup_iam_permissions(self) -> bool:
         """Setup required IAM permissions for SageMaker tests"""
         try:
-            result=subprocess.run([
+            result=self.run_subprocess_with_logging([
                 "curl", "-s", "--connect-timeout", "5",
                 "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
             ], capture_output=True, text=True, timeout=10)
@@ -141,7 +142,7 @@ class SageMakerTestAgent(BaseAutomation):
             if result.returncode != 0 or not result.stdout.strip():
                 return True  
             instance_profile=result.stdout.strip()
-            result=subprocess.run([
+            result=self.run_subprocess_with_logging([
                 "aws", "iam", "get-instance-profile",
                 "--instance-profile-name", instance_profile,
                 "--query", "InstanceProfile.Roles[0].RoleName",
@@ -159,13 +160,13 @@ class SageMakerTestAgent(BaseAutomation):
                     "Resource":"*"
                 }]
             }
-            result=subprocess.run([
+            result=self.run_subprocess_with_logging([
                 "aws", "iam", "get-role-policy",
                 "--role-name", role_name,
                 "--policy-name", "SageMakerTestingPolicy"
             ], capture_output=True, text=True)
             if result.returncode != 0:
-                subprocess.run([
+                self.run_subprocess_with_logging([
                     "aws", "iam", "put-role-policy",
                     "--role-name", role_name,
                     "--policy-name", "SageMakerTestingPolicy",
@@ -173,7 +174,7 @@ class SageMakerTestAgent(BaseAutomation):
                 ], check=True)
                 self.logger.info("✅ Created SageMaker testing policy")
             if not os.environ.get('SAGEMAKER_ROLE_ARN'):
-                account_result=subprocess.run([
+                account_result=self.run_subprocess_with_logging([
                     "aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text"
                 ], capture_output=True, text=True, check=True)
                 account_id=account_result.stdout.strip()
@@ -193,10 +194,10 @@ class SageMakerTestAgent(BaseAutomation):
             account_id=os.environ.get('ACCOUNT_ID')
             region=os.environ.get('REGION', 'us-east-1')
             login_cmd=f"aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {account_id}.dkr.ecr.{region}.amazonaws.com"
-            subprocess.run(login_cmd, shell=True, check=True)
+            self.run_subprocess_with_logging(login_cmd, shell=True, check=True)
             os.chdir(test_dir)
             if Path("requirements.txt").exists():
-                subprocess.run(["pip3", "install", "-r", "requirements.txt"], check=True)
+                self.run_subprocess_with_logging(["pip3", "install", "-r", "requirements.txt"], check=True)
             self.logger.info(f"✅ Setup complete for {container_type}")
             return True
         except Exception as e:
@@ -221,7 +222,7 @@ class SageMakerTestAgent(BaseAutomation):
             "--py-version", python_version
         ]
         try:
-            result=subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+            result=self.run_subprocess_with_logging(cmd, capture_output=True, text=True, timeout=1800)
             success=result.returncode == 0
             output=result.stdout + result.stderr
             self.logger.info(f"📊 Test {'PASSED' if success else 'FAILED'}:{image_uri.split('/')[-1]}")
@@ -271,7 +272,7 @@ class SageMakerTestAgent(BaseAutomation):
                 version=fix.get('version', '')
                 package_spec=package if version in ['latest', ''] else f"{package}=={version}"
                 try:
-                    subprocess.run(["pip3", "install", package_spec], check=True)
+                    self.run_subprocess_with_logging(["pip3", "install", package_spec], check=True)
                     fixes_applied=True
                     self.logger.info(f"✅ Installed:{package}")
                 except subprocess.CalledProcessError:
