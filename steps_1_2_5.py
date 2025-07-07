@@ -4,11 +4,13 @@ import shutil
 import subprocess
 from pathlib import Path
 from common import BaseAutomation
-class Steps125Automation(BaseAutomation):
+from automation_logger import LoggerMixin
+class Steps125Automation(BaseAutomation,LoggerMixin):
     """Handles Steps 1, 2, and 5:Branch creation, TOML update, and Package model"""
     
     def __init__(self, current_version: str, previous_version: str, fork_url: str):
         super().__init__(current_version, previous_version, fork_url)
+        self.setup_logging(current_version,custom_name="steps_1_2_5")
 
     def step1_create_branch(self):
         """Step 1:Cut a new branch in fork to work on a new release"""
@@ -19,27 +21,27 @@ class Steps125Automation(BaseAutomation):
             os.chdir(self.workspace_dir)
             if not Path("deep-learning-containers").exists():
                 self.logger.info(f"Cloning from {self.fork_url}")
-                subprocess.run(["git", "clone", self.fork_url, "deep-learning-containers"], check=True)
+                self.run_subprocess_with_logging(["git", "clone", self.fork_url, "deep-learning-containers"], check=True)
             os.chdir("deep-learning-containers")
-            result=subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True)
+            result=self.run_subprocess_with_logging(["git", "remote", "get-url", "origin"], capture_output=True, text=True)
             self.logger.info(f"Working in repository:{result.stdout.strip()}")
             try:
-                subprocess.run(["git", "remote", "get-url", "upstream"], capture_output=True, check=True)
+                self.run_subprocess_with_logging(["git", "remote", "get-url", "upstream"], capture_output=True, check=True)
                 self.logger.info("Upstream remote already exists")
             except:
                 self.logger.info("Adding upstream remote")
-                subprocess.run(["git", "remote", "add", "upstream", 
+                self.run_subprocess_with_logging(["git", "remote", "add", "upstream", 
                               "https://github.com/aws/deep-learning-containers.git"], check=True)
             self.logger.info("Syncing with upstream...")
-            subprocess.run(["git", "fetch", "upstream"], check=True)
-            subprocess.run(["git", "checkout", "master"], check=True)
-            subprocess.run(["git", "reset", "--hard", "upstream/master"], check=True)
+            self.run_subprocess_with_logging(["git", "fetch", "upstream"], check=True)
+            self.run_subprocess_with_logging(["git", "checkout", "master"], check=True)
+            self.run_subprocess_with_logging(["git", "reset", "--hard", "upstream/master"], check=True)
             branch_name=f"autogluon-{self.current_version}-release"
             self.logger.info(f"Creating branch:{branch_name}")
             try:
-                subprocess.run(["git", "checkout", "-b", branch_name], check=True)
+                self.run_subprocess_with_logging(["git", "checkout", "-b", branch_name], check=True)
             except:
-                subprocess.run(["git", "checkout", branch_name], check=True)
+                self.run_subprocess_with_logging(["git", "checkout", branch_name], check=True)
             self.logger.info("✅ Step 1 completed:Release branch created")
             return True
         except Exception as e:
@@ -84,8 +86,8 @@ class Steps125Automation(BaseAutomation):
             self.logger.info("Updated dlc-pr-autogluon-inference buildspec path")
             with open(toml_path, 'w') as f:
                 f.write(content)
-            subprocess.run(["git", "add", str(toml_path)], check=True)
-            subprocess.run(["git", "commit", "-m", 
+            self.run_subprocess_with_logging(["git", "add", str(toml_path)], check=True)
+            self.run_subprocess_with_logging(["git", "commit", "-m", 
                            f"AutoGluon {self.current_version}:Update TOML for AutoGluon-only build"], 
                           check=True)
             self.logger.info("✅ Step 2 completed:TOML updated and committed")
@@ -116,7 +118,7 @@ class Steps125Automation(BaseAutomation):
             os.chdir(self.main_project_dir)
             self.logger.info(f"Changed to:{os.getcwd()}")
             self.logger.info("Executing package_model.py...")
-            result=subprocess.run(['python', 'package_model.py'], check=True)
+            result=self.run_subprocess_with_logging(['python', 'package_model.py'], check=True)
             self.logger.info("✅ Model training completed")
             source_file=self.main_project_dir / f"model_{self.current_version}.tar.gz"
             target_dir=self.repo_dir / "test/sagemaker_tests/autogluon/inference/resources/model"

@@ -9,21 +9,22 @@ from typing import Dict, List, Optional
 import requests
 
 from common import BaseAutomation
-
-class QuickChecksAgent(BaseAutomation):
+from automation_logger import LoggerMixin
+class QuickChecksAgent(BaseAutomation,LoggerMixin):
     """Agent to handle dlc-pr-quick-checks failures by reverting TOML to full framework build"""
     
     def __init__(self, current_version: str, previous_version: str, fork_url: str):
         super().__init__(current_version, previous_version, fork_url)
         self.setup_github_credentials()
         self.branch_name = f"autogluon-{current_version}-release"
+        self.setup_logging(current_version,custom_name="quick_check")
         
     def setup_github_credentials(self):
         """Setup GitHub credentials for API access"""
         self.github_token = os.environ.get('GITHUB_TOKEN')
         if not self.github_token:
             try:
-                result = subprocess.run(
+                result = self.run_subprocess_with_logging(
                     ["gh", "auth", "token"], 
                     capture_output=True, 
                     text=True, 
@@ -360,21 +361,21 @@ class QuickChecksAgent(BaseAutomation):
             os.chdir(self.repo_dir)
             
             # Check if there are changes
-            result = subprocess.run(["git", "diff", "--quiet"], capture_output=True)
+            result = self.run_subprocess_with_logging(["git", "diff", "--quiet"], capture_output=True)
             if result.returncode == 0:
                 self.logger.info("ℹ️ No changes to commit")
                 return True
             
             # Show what changes will be committed
             self.logger.info("📋 Changes to be committed:")
-            diff_result = subprocess.run(["git", "diff", "--name-only"], capture_output=True, text=True)
+            diff_result = self.run_subprocess_with_logging(["git", "diff", "--name-only"], capture_output=True, text=True)
             if diff_result.stdout:
                 for file in diff_result.stdout.strip().split('\n'):
                     self.logger.info(f"   📝 Modified: {file}")
             
             # Show a preview of the TOML changes
             self.logger.info("\n📄 Preview of TOML changes:")
-            diff_preview = subprocess.run(["git", "diff", "dlc_developer_config.toml"], capture_output=True, text=True)
+            diff_preview = self.run_subprocess_with_logging(["git", "diff", "dlc_developer_config.toml"], capture_output=True, text=True)
             if diff_preview.stdout:
                 for line in diff_preview.stdout.strip().split('\n'):
                     if line.startswith('+') and 'build_frameworks' in line:
@@ -412,13 +413,13 @@ class QuickChecksAgent(BaseAutomation):
                     return False
             
             # Add changes
-            subprocess.run(["git", "add", "dlc_developer_config.toml"], check=True)
+            self.run_subprocess_with_logging(["git", "add", "dlc_developer_config.toml"], check=True)
             
             # Commit changes
-            subprocess.run(["git", "commit", "-m", commit_message], check=True)
+            self.run_subprocess_with_logging(["git", "commit", "-m", commit_message], check=True)
             
             # Push to branch
-            subprocess.run(["git", "push", "origin", self.branch_name], check=True)
+            self.run_subprocess_with_logging(["git", "push", "origin", self.branch_name], check=True)
             
             self.logger.info(f"✅ Successfully committed and pushed TOML revert changes")
             return True

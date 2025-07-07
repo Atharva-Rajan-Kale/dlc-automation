@@ -4,14 +4,16 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Optional
 from common import BaseAutomation, ECRImageSelector
+from automation_logger import LoggerMixin
 
-class Step8InfrastructureAutomation(BaseAutomation):
+class Step8InfrastructureAutomation(BaseAutomation,LoggerMixin):
     """Handles Step 8: Infrastructure deployment after PR merge"""
     
     def __init__(self, current_version: str, previous_version: str, fork_url: str):
         super().__init__(current_version, previous_version, fork_url)
         self.python_version_info = None
         self.infrastructure_dir = None
+        self.setup_logging(current_version,custom_name="dlc_cr")
     
     def set_python_version_info(self, python_info: Dict):
         """Set python version info from external source (e.g., from steps 3-4)"""
@@ -97,20 +99,20 @@ class Step8InfrastructureAutomation(BaseAutomation):
                 self.logger.info(f"Changed to existing workspace directory: {os.getcwd()}")
             else:
                 self.logger.info("Creating Brazil workspace...")
-                subprocess.run(["brazil", "ws", "create", "-n", "DLContainersInfra"], check=True)
+                self.run_subprocess_with_logging(["brazil", "ws", "create", "-n", "DLContainersInfra"], check=True)
                 os.chdir(workspace_dir)
                 self.infrastructure_dir = workspace_dir
                 self.logger.info(f"Changed to new workspace directory: {os.getcwd()}")
             
             # Setup workspace (always do this to ensure it's up to date)
             self.logger.info("Setting up workspace with mainline...")
-            subprocess.run(["brazil", "ws", "use", "-vs", "DLContainersInfra/mainline"], check=True)
+            self.run_subprocess_with_logging(["brazil", "ws", "use", "-vs", "DLContainersInfra/mainline"], check=True)
             self.logger.info("Adding DLContainersInfraCDK package...")
-            subprocess.run(["brazil", "ws", "use", "-p", "DLContainersInfraCDK"], check=True)
+            self.run_subprocess_with_logging(["brazil", "ws", "use", "-p", "DLContainersInfraCDK"], check=True)
             
             # Sync workspace to get latest changes
             self.logger.info("🔄 Syncing workspace to get latest changes...")
-            subprocess.run(["brazil", "ws", "sync", "--md"], check=True)
+            self.run_subprocess_with_logging(["brazil", "ws", "sync", "--md"], check=True)
             
             self.logger.info("Changing to CDK directory...")
             os.chdir("src/DLContainersInfraCDK")
@@ -217,9 +219,9 @@ class Step8InfrastructureAutomation(BaseAutomation):
         """Commit changes locally before submitting CR"""
         self.logger.info("Committing infrastructure changes...")
         try:
-            subprocess.run(["git", "add", "."], check=True)
+            self.run_subprocess_with_logging(["git", "add", "."], check=True)
             commit_message = f"AutoGluon {self.current_version}: Update infrastructure deployment config"
-            subprocess.run(["git", "commit", "-m", commit_message], check=True)
+            self.run_subprocess_with_logging(["git", "commit", "-m", commit_message], check=True)
             self.logger.info(f"✅ Changes committed locally with message: {commit_message}")
             return True
         except subprocess.CalledProcessError as e:
@@ -236,7 +238,7 @@ class Step8InfrastructureAutomation(BaseAutomation):
             if not self.commit_changes():
                 return False
             self.logger.info("Submitting code review...")
-            result = subprocess.run(["cr"], check=True, capture_output=True, text=True)
+            result = self.run_subprocess_with_logging(["cr"], check=True, capture_output=True, text=True)
             self.logger.info("✅ Code review submitted successfully")
             self.logger.info(f"CR output: {result.stdout}")
             return True
