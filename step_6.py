@@ -189,3 +189,5 @@ class Step6Automation(BaseAutomation):
         if not steps_only or 6 in steps_only:
             results[6]=self.step6_build_upload_docker()
         return results
+    
+    

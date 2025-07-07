@@ -4,7 +4,6 @@ import shutil
 from pathlib import Path
 from typing import Dict, Optional
 from common import BaseAutomation, ECRImageSelector
-
 class Steps34Automation(BaseAutomation):
     """Handles Steps 3 and 4: Docker resources and Buildspec updates"""
     
@@ -78,8 +77,8 @@ class Steps34Automation(BaseAutomation):
             
             training_success=self.update_buildspec("training", image_info)
             inference_success=self.update_buildspec("inference", image_info)
-            
-            if training_success and inference_success:
+            conftest_success=self.update_conftest_py_version(image_info)
+            if training_success and inference_success and conftest_success:
                 self.logger.info("✅ Step 4 completed: Buildspec files updated (not committed)")
                 return True
             else:
@@ -90,15 +89,15 @@ class Steps34Automation(BaseAutomation):
             return False
         finally:
             os.chdir(original_dir)
-
+    
     def extract_buildspec_info_from_images(self):
         """Extract version info from selected images for buildspec updates"""
         sample_image=self.selected_images['training_cpu']
         self.logger.info(f"Extracting info from sample image tag: {sample_image.tag}")
         python_match=re.search(r'-py(\d+)-', sample_image.tag)
-        python_version=f"py{python_match.group(1)}" if python_match else "py311"
+        python_version=f"py{python_match.group(1)}"
         os_match=re.search(r'ubuntu(\d+\.\d+)', sample_image.tag)
-        os_version=f"ubuntu{os_match.group(1)}" if os_match else "ubuntu22.04"
+        os_version=f"ubuntu{os_match.group(1)}"
         cuda_version=self.selected_images['cuda_version']
         pytorch_version=self.selected_images['pytorch_version']
         return {
@@ -107,7 +106,61 @@ class Steps34Automation(BaseAutomation):
             'cuda_version': cuda_version,
             'pytorch_version': pytorch_version
         }
-
+    
+    def update_conftest_py_version(self, image_info):
+        """Update conftest.py with the extracted python version"""
+        conftest_path = Path("test/sagemaker_tests/autogluon/inference/conftest.py")
+        if not conftest_path.exists():
+            self.logger.error(f"Conftest file not found: {conftest_path}")
+            return False
+        self.logger.info(f"Updating conftest.py: {conftest_path}")
+        # Extract numeric python version (remove 'py' prefix)
+        python_version_numeric = image_info['python_version'][2:]
+        self.logger.info(f"Updating conftest.py with python version: {python_version_numeric}")
+        try:
+            with open(conftest_path, 'r') as f:
+                content = f.read()
+            original_content = content
+            # Extract current choices and update them if needed
+            choices_pattern = r'choices=\[([^\]]+)\]'
+            choices_match = re.search(choices_pattern, content)
+            if choices_match:
+                # Parse current choices
+                choices_str = choices_match.group(1)
+                current_choices = [choice.strip().strip('"\'') for choice in choices_str.split(',')]
+                self.logger.info(f"Current choices: {current_choices}")
+                # Check if current version is different from last choice
+                if current_choices and current_choices[-1] != python_version_numeric:
+                    # Remove first and append current version
+                    new_choices = current_choices[1:] + [python_version_numeric]
+                    self.logger.info(f"Updated choices: {new_choices} (removed first, added {python_version_numeric})")
+                else:
+                    new_choices = current_choices
+                    self.logger.info(f"No changes to choices needed (current version {python_version_numeric} matches last choice)")
+            else:
+                if new_choices[-1] != python_version_numeric:
+                    new_choices = new_choices[1:] + [python_version_numeric]
+                self.logger.info(f"No existing choices found, using: {new_choices}")
+            choices_formatted = ', '.join([f'"{choice}"' for choice in new_choices])
+            # Update the parser.addoption line with new choices and default
+            pattern = r'parser\.addoption\("--py-version",\s*choices=\[.*?\],\s*default=".*?"\)'
+            replacement = f'parser.addoption("--py-version", choices=[{choices_formatted}], default="{python_version_numeric}")'
+            # Update the content
+            updated_content = re.sub(pattern, replacement, content)
+            if updated_content != original_content:
+                with open(conftest_path, 'w') as f:
+                    f.write(updated_content)
+                self.logger.info(f"✅ Successfully updated {conftest_path}")
+                self.logger.info(f"   📋 Updated choices to: {new_choices}")
+                self.logger.info(f"   📋 Updated python version default to: {python_version_numeric}")
+                return True
+            else:
+                self.logger.info(f"ℹ️  No changes needed for {conftest_path}")
+                return True
+        except Exception as e:
+            self.logger.error(f"❌ Failed to update {conftest_path}: {e}")
+            return False
+        
     def update_buildspec(self, container_type, image_info):
         """Update buildspec.yml for training or inference"""
         buildspec_path=Path(f"autogluon/{container_type}/buildspec.yml")
@@ -258,32 +311,142 @@ class Steps34Automation(BaseAutomation):
                 self.logger.warning(f"No CUDA directory found in {py3_dir}")
 
     def update_single_dockerfile(self, dockerfile_path: Path, new_image_uri: str, image_type: str):
-        """Update a single Dockerfile with new FROM statement and AUTOGLUON_VERSION"""
+        """Update a single Dockerfile with new FROM statement and AUTOGLUON_VERSION, 
+        removing additional dependencies after autogluon installation"""
         try:
             with open(dockerfile_path, 'r') as f:
-                content=f.read()
-            original_content=content
-            content=re.sub(
-                r'^FROM\s+.*$',
-                f'FROM {new_image_uri}',
-                content,
-                flags=re.MULTILINE
-            )
-            content=re.sub(
-                r'AUTOGLUON_VERSION=[\d.]+',
-                f'AUTOGLUON_VERSION={self.current_version}',
-                content
-            )
-            if content != original_content:
+                lines = f.readlines()
+            
+            original_content = ''.join(lines)
+            updated_lines = []
+            i = 0
+            
+            while i < len(lines):
+                line = lines[i]
+                
+                # Update FROM statement
+                if line.strip().startswith('FROM '):
+                    updated_lines.append(f'FROM {new_image_uri}\n')
+                    i += 1
+                    continue
+                
+                # Update AUTOGLUON_VERSION
+                if 'AUTOGLUON_VERSION=' in line:
+                    line = re.sub(r'AUTOGLUON_VERSION=[\d.]+', f'AUTOGLUON_VERSION={self.current_version}', line)
+                
+                # Handle RUN blocks containing autogluon installation
+                if line.strip().startswith('RUN ') and self._contains_autogluon_install(lines, i):
+                    # Process this RUN block specially
+                    run_block_result = self._process_autogluon_run_block(lines, i)
+                    updated_lines.extend(run_block_result['processed_lines'])
+                    i = run_block_result['next_index']
+                    continue
+                
+                updated_lines.append(line)
+                i += 1
+            
+            new_content = ''.join(updated_lines)
+            
+            if new_content != original_content:
                 with open(dockerfile_path, 'w') as f:
-                    f.write(content)
+                    f.write(new_content)
                 self.logger.info(f"✅ Updated {image_type} Dockerfile: {dockerfile_path.relative_to(Path('.'))}")
                 self.logger.info(f"   FROM: {new_image_uri}")
+                self.logger.info(f"   AUTOGLUON_VERSION: {self.current_version}")
+                self.logger.info(f"   Removed additional dependencies after autogluon installation")
             else:
                 self.logger.info(f"ℹ️  No changes needed for {dockerfile_path.relative_to(Path('.'))}")
+                
         except Exception as e:
             self.logger.error(f"❌ Failed to update {dockerfile_path}: {e}")
 
+    def _contains_autogluon_install(self, lines, start_index):
+        """Check if a RUN block contains autogluon installation"""
+        i = start_index
+        while i < len(lines):
+            line = lines[i].strip()
+            if 'autogluon==${AUTOGLUON_VERSION}' in line or 'autogluon==' in line:
+                return True
+            # If we hit a line that doesn't continue the RUN command, stop looking
+            if line and not line.startswith('&&') and not line.endswith('\\') and not line.startswith('#') and i > start_index:
+                break
+            i += 1
+        return False
+
+    def _process_autogluon_run_block(self, lines, start_index):
+        """Process a RUN block containing autogluon, keeping only content up to autogluon install"""
+        processed_lines = []
+        i = start_index
+        found_autogluon = False
+        
+        while i < len(lines):
+            line = lines[i]
+            stripped_line = line.strip()
+            
+            # Add the line by default
+            should_add_line = True
+            
+            # Check if this line contains the autogluon installation
+            if ('autogluon==${AUTOGLUON_VERSION}' in line or 'autogluon==' in line) and 'pip install' in line:
+                found_autogluon = True
+                # Remove continuation character since we're ending the RUN block here
+                if line.rstrip().endswith(' \\'):
+                    line = line.rstrip().rstrip('\\').rstrip() + '\n'
+                elif line.rstrip().endswith('\\'):
+                    line = line.rstrip().rstrip('\\') + '\n'
+            
+            # After finding autogluon, skip all subsequent pip install lines and comments until RUN block ends
+            elif found_autogluon:
+                # Skip comment lines
+                if stripped_line.startswith('#'):
+                    should_add_line = False
+                # Skip pip install lines that come after autogluon
+                elif 'pip install' in stripped_line and (stripped_line.startswith('&&') or stripped_line.startswith('# ')):
+                    should_add_line = False
+                # Skip continuation lines that are part of pip install commands we're removing
+                elif stripped_line.startswith('&&') and 'pip install' in stripped_line:
+                    should_add_line = False
+                # If this line doesn't continue the RUN command, we've reached the end of the RUN block
+                elif (stripped_line and not stripped_line.startswith('&&') and 
+                    not stripped_line.startswith('#') and not stripped_line.endswith('\\') and 
+                    not stripped_line == ''):
+                    # This line starts a new command, add it and break
+                    processed_lines.append(line)
+                    i += 1
+                    break
+            
+            if should_add_line:
+                processed_lines.append(line)
+            
+            i += 1
+            
+            # If we've processed the autogluon line and cleaned up the RUN block, check if we should continue
+            if found_autogluon and not line.rstrip().endswith('\\'):
+                # Look ahead to see if there are more lines in this RUN block
+                continue_run_block = False
+                j = i
+                while j < len(lines):
+                    next_line = lines[j].strip()
+                    if not next_line:  # Empty line
+                        j += 1
+                        continue
+                    elif next_line.startswith('#'):  # Comment line
+                        j += 1
+                        continue
+                    elif next_line.startswith('&&'):  # Continuation of RUN block
+                        continue_run_block = True
+                        break
+                    else:  # New command
+                        break
+                
+                if not continue_run_block:
+                    break
+        
+        return {
+            'processed_lines': processed_lines,
+            'next_index': i
+        }
+    
     def run_steps(self, steps_only=None):
         """Run steps 3 and 4"""
         results={}

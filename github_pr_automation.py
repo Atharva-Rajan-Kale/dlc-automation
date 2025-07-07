@@ -7,8 +7,7 @@ from pathlib import Path
 from typing import Optional, Dict, List
 import logging
 
-
-class GitHubPRAutomation:
+class GitHubPRAutomation():
     """Handles automatic PR creation to upstream repository"""
     
     def __init__(self, current_version: str, fork_url: str, repo_dir: Path):
@@ -63,7 +62,7 @@ class GitHubPRAutomation:
                     subprocess.run(["git", "add", "."], check=True)
                     subprocess.run([
                         "git", "commit", "-m", 
-                        f"AutoGluon {self.current_version}: Format code with black"
+                        f"Add Autogluon v{self.current_version}"
                     ], check=True)
                     self.logger.info("✅ Formatting changes committed")
                 else:

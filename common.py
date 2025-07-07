@@ -175,4 +175,3 @@ class BaseAutomation:
         self.logger=logging.getLogger(__name__)
         self.logger.info(f"Main project directory:{self.main_project_dir}")
         self.logger.info(f"Workspace directory:{self.workspace_dir}")
-        self.logger.info(f"Repository directory:{self.repo_dir}")
