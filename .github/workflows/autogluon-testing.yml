@@ -130,6 +130,7 @@ jobs:
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
             --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
             --parameters testType="pip-check",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
+            --container-overrides environment='[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}}]' \
             --query 'jobId' --output text)
           
           while true; do
@@ -170,6 +171,7 @@ jobs:
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
             --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
             --parameters testType="autogluon-tests",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
+            --container-overrides environment='[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}}]' \
             --query 'jobId' --output text)
           
           while true; do
@@ -210,6 +212,7 @@ jobs:
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
             --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
             --parameters testType="sagemaker-tests",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
+            --container-overrides environment='[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}}]' \
             --query 'jobId' --output text)
           
           while true; do
@@ -250,6 +253,7 @@ jobs:
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
             --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
             --parameters testType="security-tests",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
+            --container-overrides environment='[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}}]' \
             --query 'jobId' --output text)
           
           while true; do
@@ -290,6 +294,7 @@ jobs:
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
             --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
             --parameters testType="quick-checks",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
+            --container-overrides environment='[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}}]' \
             --query 'jobId' --output text)
           
           while true; do
