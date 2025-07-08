@@ -105,12 +105,12 @@ class Step6Automation(BaseAutomation, LoggerMixin):
             self.docker_cleanup_between_builds()
         
         try:
-            # Build the image
+            # Build the image - REMOVED the timeout parameter that was causing the error
             self.run_subprocess_with_logging(
                 build_args,
                 step_description=description,
-                capture_output=False,
-                timeout=7200  # 2 hour timeout per image
+                capture_output=False
+                # Removed timeout=7200 as it's not supported by Popen
             )
             
             self.logger.info(f"✅ {description} completed successfully")
@@ -123,10 +123,6 @@ class Step6Automation(BaseAutomation, LoggerMixin):
             
             return True
             
-        except subprocess.TimeoutExpired:
-            self.logger.error(f"❌ {description} timed out after 2 hours")
-            self.docker_cleanup_between_builds()
-            return False
         except subprocess.CalledProcessError as e:
             self.logger.error(f"❌ {description} failed with exit code {e.returncode}")
             self.docker_cleanup_between_builds()
