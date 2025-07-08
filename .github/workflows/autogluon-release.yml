@@ -40,6 +40,7 @@ on:
 env:
   PYTHONPATH: ${{ github.workspace }}/src
   REGION: us-east-1
+  CODEBUILD_REGION: us-west-2
 
 jobs:
   setup:
@@ -134,7 +135,7 @@ jobs:
           echo "CODEBUILD_AWS_ACCESS_KEY_ID=${{ secrets.CODEBUILD_ACCESS_KEY_ID }}" >> $GITHUB_ENV
           echo "CODEBUILD_AWS_SECRET_ACCESS_KEY=${{ secrets.CODEBUILD_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
           echo "CODEBUILD_AWS_SESSION_TOKEN=${{ secrets.CODEBUILD_AWS_SESSION_TOKEN }}" >> $GITHUB_ENV
-          echo "CODEBUILD_REGION=${{ env.REGION }}" >> $GITHUB_ENV
+          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
           
           # Bedrock credentials
           echo "BEDROCK_INFERENCE_PROFILE_ARN=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}" >> $GITHUB_ENV
@@ -228,6 +229,8 @@ jobs:
           echo "**Workflow Type:** ${{ inputs.workflow_type }}" >> $GITHUB_STEP_SUMMARY
           echo "**Fork URL:** ${{ inputs.fork_url }}" >> $GITHUB_STEP_SUMMARY
           echo "**Testing Enabled:** ${{ inputs.enable_testing }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** ${{ env.REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**CodeBuild Region:** ${{ env.CODEBUILD_REGION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -f "automation_logs/enhanced_main_automation.log" ]; then

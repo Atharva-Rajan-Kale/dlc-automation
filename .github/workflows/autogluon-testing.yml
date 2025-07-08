@@ -43,6 +43,7 @@ on:
 env:
   PYTHONPATH: ${{ github.workspace }}/src
   REGION: us-east-1
+  CODEBUILD_REGION: us-west-2
 
 jobs:
   setup-testing:
@@ -142,6 +143,7 @@ jobs:
         run: |
           echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
           echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
+          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
           echo "BEDROCK_INFERENCE_PROFILE_ARN=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}" >> $GITHUB_ENV
 
       - name: ECR Login
@@ -199,6 +201,7 @@ jobs:
         run: |
           echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
           echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
+          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
 
       - name: ECR Login
         run: |
@@ -252,6 +255,7 @@ jobs:
         run: |
           echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
           echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
+          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
           echo "BEDROCK_INFERENCE_PROFILE_ARN=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}" >> $GITHUB_ENV
 
       - name: ECR Login
@@ -309,6 +313,7 @@ jobs:
           echo "CODEBUILD_AWS_ACCESS_KEY_ID=${{ secrets.CODEBUILD_ACCESS_KEY_ID }}" >> $GITHUB_ENV
           echo "CODEBUILD_AWS_SECRET_ACCESS_KEY=${{ secrets.CODEBUILD_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
           echo "CODEBUILD_AWS_SESSION_TOKEN=${{ secrets.CODEBUILD_AWS_SESSION_TOKEN }}" >> $GITHUB_ENV
+          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
           echo "BEDROCK_INFERENCE_PROFILE_ARN=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}" >> $GITHUB_ENV
           echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
 
@@ -351,6 +356,8 @@ jobs:
       - name: Configure environment
         run: |
           echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
+          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
+          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
 
       - name: Run Quick Checks
         run: |
@@ -379,6 +386,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** ${{ inputs.current_version }}" >> $GITHUB_STEP_SUMMARY
           echo "**Test Suite:** ${{ inputs.test_suite }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** ${{ env.REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**CodeBuild Region:** ${{ env.CODEBUILD_REGION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Check each job result

@@ -36,6 +36,7 @@ on:
 env:
   PYTHONPATH: ${{ github.workspace }}/src
   REGION: us-east-1
+  CODEBUILD_REGION: us-west-2
 
 jobs:
   infrastructure-setup:
@@ -114,6 +115,7 @@ jobs:
         run: |
           echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
           echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
+          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
 
       - name: Run infrastructure deployment
         id: infra-deploy
@@ -172,6 +174,7 @@ jobs:
         run: |
           echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
           echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
+          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
           echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
 
       - name: Run release images automation
@@ -229,6 +232,7 @@ jobs:
         run: |
           echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
           echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
+          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
 
       - name: Run Asimov security scan
         id: asimov-scan
@@ -263,6 +267,8 @@ jobs:
           echo "**Version:** ${{ inputs.previous_version }} → ${{ inputs.current_version }}" >> $GITHUB_STEP_SUMMARY
           echo "**Operation:** ${{ inputs.operation }}" >> $GITHUB_STEP_SUMMARY
           echo "**Fork URL:** ${{ inputs.fork_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** ${{ env.REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**CodeBuild Region:** ${{ env.CODEBUILD_REGION }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           echo "### 📊 Component Status" >> $GITHUB_STEP_SUMMARY
