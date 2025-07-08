@@ -103,7 +103,11 @@ jobs:
             --parameters currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}",skipConfirmations="${{ inputs.skip_confirmations }}" \
             --query 'jobId' --output text)
           
-          aws batch wait job-execution-complete --jobs $JOB_ID
+          while true; do
+            STATUS=$(aws batch describe-jobs --jobs $JOB_ID --query 'jobs[0].status' --output text)
+            if [ "$STATUS" = "SUCCEEDED" ]; then break; elif [ "$STATUS" = "FAILED" ]; then exit 1; fi
+            sleep 30
+          done
           echo "✅ Infrastructure deployment completed: $JOB_ID"
 
       - name: Upload infrastructure deployment logs
@@ -139,7 +143,11 @@ jobs:
             --parameters currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
             --query 'jobId' --output text)
           
-          aws batch wait job-execution-complete --jobs $JOB_ID
+          while true; do
+            STATUS=$(aws batch describe-jobs --jobs $JOB_ID --query 'jobs[0].status' --output text)
+            if [ "$STATUS" = "SUCCEEDED" ]; then break; elif [ "$STATUS" = "FAILED" ]; then exit 1; fi
+            sleep 30
+          done
           echo "✅ Release images completed: $JOB_ID"
 
       - name: Upload release images logs
@@ -175,7 +183,11 @@ jobs:
             --parameters currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
             --query 'jobId' --output text)
           
-          aws batch wait job-execution-complete --jobs $JOB_ID
+          while true; do
+            STATUS=$(aws batch describe-jobs --jobs $JOB_ID --query 'jobs[0].status' --output text)
+            if [ "$STATUS" = "SUCCEEDED" ]; then break; elif [ "$STATUS" = "FAILED" ]; then exit 1; fi
+            sleep 30
+          done
           echo "✅ Asimov security scan completed: $JOB_ID"
 
       - name: Upload Asimov scan logs

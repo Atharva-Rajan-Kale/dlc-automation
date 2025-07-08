@@ -132,7 +132,11 @@ jobs:
             --parameters testType="pip-check",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
             --query 'jobId' --output text)
           
-          aws batch wait job-execution-complete --jobs $JOB_ID
+          while true; do
+            STATUS=$(aws batch describe-jobs --jobs $JOB_ID --query 'jobs[0].status' --output text)
+            if [ "$STATUS" = "SUCCEEDED" ]; then break; elif [ "$STATUS" = "FAILED" ]; then exit 1; fi
+            sleep 30
+          done
           echo "✅ Pip check completed: $JOB_ID"
 
       - name: Upload pip check results
@@ -168,7 +172,11 @@ jobs:
             --parameters testType="autogluon-tests",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
             --query 'jobId' --output text)
           
-          aws batch wait job-execution-complete --jobs $JOB_ID
+          while true; do
+            STATUS=$(aws batch describe-jobs --jobs $JOB_ID --query 'jobs[0].status' --output text)
+            if [ "$STATUS" = "SUCCEEDED" ]; then break; elif [ "$STATUS" = "FAILED" ]; then exit 1; fi
+            sleep 30
+          done
           echo "✅ AutoGluon tests completed: $JOB_ID"
 
       - name: Upload AutoGluon test results
@@ -204,7 +212,11 @@ jobs:
             --parameters testType="sagemaker-tests",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
             --query 'jobId' --output text)
           
-          aws batch wait job-execution-complete --jobs $JOB_ID
+          while true; do
+            STATUS=$(aws batch describe-jobs --jobs $JOB_ID --query 'jobs[0].status' --output text)
+            if [ "$STATUS" = "SUCCEEDED" ]; then break; elif [ "$STATUS" = "FAILED" ]; then exit 1; fi
+            sleep 30
+          done
           echo "✅ SageMaker tests completed: $JOB_ID"
 
       - name: Upload SageMaker test results
@@ -240,7 +252,11 @@ jobs:
             --parameters testType="security-tests",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
             --query 'jobId' --output text)
           
-          aws batch wait job-execution-complete --jobs $JOB_ID
+          while true; do
+            STATUS=$(aws batch describe-jobs --jobs $JOB_ID --query 'jobs[0].status' --output text)
+            if [ "$STATUS" = "SUCCEEDED" ]; then break; elif [ "$STATUS" = "FAILED" ]; then exit 1; fi
+            sleep 30
+          done
           echo "✅ Security tests completed: $JOB_ID"
 
       - name: Upload security test results
@@ -276,7 +292,11 @@ jobs:
             --parameters testType="quick-checks",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
             --query 'jobId' --output text)
           
-          aws batch wait job-execution-complete --jobs $JOB_ID
+          while true; do
+            STATUS=$(aws batch describe-jobs --jobs $JOB_ID --query 'jobs[0].status' --output text)
+            if [ "$STATUS" = "SUCCEEDED" ]; then break; elif [ "$STATUS" = "FAILED" ]; then exit 1; fi
+            sleep 30
+          done
           echo "✅ Quick checks completed: $JOB_ID"
 
       - name: Upload quick check results
