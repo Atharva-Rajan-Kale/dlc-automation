@@ -86,14 +86,6 @@ jobs:
     if: needs.infrastructure-setup.outputs.should-deploy-infra == 'true'
     timeout-minutes: 60
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -102,36 +94,17 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.REGION }}
 
-      - name: Install dependencies
+      - name: Submit Infrastructure Deployment Batch Job
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements_agent.txt
+          JOB_ID=$(aws batch submit-job \
+            --job-name "infrastructure-deploy-${{ github.run_number }}" \
+            --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
+            --job-definition "${{ secrets.BATCH_INFRA_JOB_DEFINITION }}" \
+            --parameters currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}",skipConfirmations="${{ inputs.skip_confirmations }}" \
+            --query 'jobId' --output text)
           
-          # Install Brazil CLI (mock for demo - replace with actual installation)
-          echo "Installing Brazil CLI..."
-          # sudo apt-get install brazil-cli  # Replace with actual Brazil CLI installation
-
-      - name: Configure environment
-        run: |
-          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
-          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
-          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
-
-      - name: Run infrastructure deployment
-        id: infra-deploy
-        run: |
-          echo "🏗️ Starting infrastructure deployment..."
-          
-          # If skip_confirmations is true, we'll need to modify the script to auto-confirm
-          if [ "${{ inputs.skip_confirmations }}" == "true" ]; then
-            export AUTO_CONFIRM="true"
-          fi
-          
-          python step_8_infrastructure.py \
-            --current-version="${{ inputs.current_version }}" \
-            --previous-version="${{ inputs.previous_version }}" \
-            --fork-url="${{ inputs.fork_url }}"
-        continue-on-error: true
+          aws batch wait job-execution-complete --jobs $JOB_ID
+          echo "✅ Infrastructure deployment completed: $JOB_ID"
 
       - name: Upload infrastructure deployment logs
         uses: actions/upload-artifact@v4
@@ -149,14 +122,6 @@ jobs:
     if: always() && needs.infrastructure-setup.outputs.should-update-images == 'true'
     timeout-minutes: 90
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -165,28 +130,17 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.REGION }}
 
-      - name: Install dependencies
+      - name: Submit Release Images Batch Job
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements_agent.txt
-
-      - name: Configure environment
-        run: |
-          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
-          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
-          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
-          echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
-
-      - name: Run release images automation
-        id: release-images
-        run: |
-          echo "📦 Starting release images automation..."
+          JOB_ID=$(aws batch submit-job \
+            --job-name "release-images-${{ github.run_number }}" \
+            --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
+            --job-definition "${{ secrets.BATCH_RELEASE_JOB_DEFINITION }}" \
+            --parameters currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
+            --query 'jobId' --output text)
           
-          python autogluon_release_automation.py \
-            --current-version="${{ inputs.current_version }}" \
-            --previous-version="${{ inputs.previous_version }}" \
-            --fork-url="${{ inputs.fork_url }}"
-        continue-on-error: true
+          aws batch wait job-execution-complete --jobs $JOB_ID
+          echo "✅ Release images completed: $JOB_ID"
 
       - name: Upload release images logs
         uses: actions/upload-artifact@v4
@@ -204,14 +158,6 @@ jobs:
     if: always() && needs.infrastructure-setup.outputs.should-run-asimov == 'true'
     timeout-minutes: 45
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -220,30 +166,17 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.REGION }}
 
-      - name: Install dependencies
+      - name: Submit Asimov Security Scan Batch Job
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements_agent.txt
+          JOB_ID=$(aws batch submit-job \
+            --job-name "asimov-scan-${{ github.run_number }}" \
+            --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
+            --job-definition "${{ secrets.BATCH_SECURITY_JOB_DEFINITION }}" \
+            --parameters currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
+            --query 'jobId' --output text)
           
-          # Install Brazil CLI (mock for demo)
-          echo "Installing Brazil CLI for Asimov scan..."
-
-      - name: Configure environment
-        run: |
-          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
-          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
-          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
-
-      - name: Run Asimov security scan
-        id: asimov-scan
-        run: |
-          echo "🔒 Starting Asimov security scan automation..."
-          
-          python asimov_scan_cr.py \
-            --current-version="${{ inputs.current_version }}" \
-            --previous-version="${{ inputs.previous_version }}" \
-            --fork-url="${{ inputs.fork_url }}"
-        continue-on-error: true
+          aws batch wait job-execution-complete --jobs $JOB_ID
+          echo "✅ Asimov security scan completed: $JOB_ID"
 
       - name: Upload Asimov scan logs
         uses: actions/upload-artifact@v4
