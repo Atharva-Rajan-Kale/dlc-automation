@@ -6,7 +6,6 @@ import subprocess
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional
-import toml
 import boto3
 from datetime import datetime
 from dataclasses import dataclass
