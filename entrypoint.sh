@@ -1,11 +1,11 @@
 #!/bin/bash
 set -e
 
-# Get parameters from AWS Batch
-CURRENT_VERSION=${currentVersion}
-PREVIOUS_VERSION=${previousVersion}
-FORK_URL=${forkUrl}
-JOB_PARAMS=${jobParams}
+# Get parameters from AWS Batch with defaults
+CURRENT_VERSION=${currentVersion:-"1.4.0"}
+PREVIOUS_VERSION=${previousVersion:-"1.3.0"}
+FORK_URL=${forkUrl:-"https://github.com/test/repo"}
+JOB_PARAMS=${jobParams:-""}
 
 echo "Starting automation with version: $PREVIOUS_VERSION → $CURRENT_VERSION"
 
