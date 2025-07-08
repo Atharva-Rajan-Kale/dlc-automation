@@ -1,0 +1,656 @@
+name: AutoGluon Release Automation
+
+on:
+  workflow_dispatch:
+    inputs:
+      current_version:
+        description: 'Current version (e.g., 1.4.0)'
+        required: true
+        type: string
+      previous_version:
+        description: 'Previous version (e.g., 1.3.0)'
+        required: true
+        type: string
+      fork_url:
+        description: 'Your fork URL'
+        required: true
+        type: string
+      run_mode:
+        description: 'Execution mode'
+        required: true
+        type: choice
+        options:
+          - 'full_automation'
+          - 'steps_1_to_6'
+          - 'steps_only'
+          - 'pr_and_security'
+          - 'infrastructure_only'
+          - 'release_images_only'
+          - 'post_pr_workflow'
+        default: 'full_automation'
+      specific_steps:
+        description: 'Specific steps to run (comma-separated, e.g., "1,2,3")'
+        required: false
+        type: string
+      enable_testing:
+        description: 'Enable testing agents'
+        required: true
+        type: boolean
+        default: true
+
+env:
+  PYTHON_VERSION: '3.11'
+  AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+  ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+  REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  
+  # Bedrock/AI Configuration
+  BEDROCK_MODEL_ID: ${{ secrets.BEDROCK_MODEL_ID || 'anthropic.claude-3-5-sonnet-20241022-v2:0' }}
+  BEDROCK_INFERENCE_PROFILE_ARN: ${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}
+  BEDROCK_AWS_ACCESS_KEY_ID: ${{ secrets.BEDROCK_AWS_ACCESS_KEY_ID }}
+  BEDROCK_AWS_SECRET_ACCESS_KEY: ${{ secrets.BEDROCK_AWS_SECRET_ACCESS_KEY }}
+  BEDROCK_REGION: ${{ secrets.BEDROCK_REGION || 'us-east-1' }}
+  
+  # CodeBuild Configuration
+  CODEBUILD_AWS_ACCESS_KEY_ID: ${{ secrets.CODEBUILD_AWS_ACCESS_KEY_ID }}
+  CODEBUILD_AWS_SECRET_ACCESS_KEY: ${{ secrets.CODEBUILD_AWS_SECRET_ACCESS_KEY }}
+  CODEBUILD_REGION: ${{ secrets.CODEBUILD_REGION || 'us-west-2' }}
+
+jobs:
+  validate-inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      is_major_release: ${{ steps.version-check.outputs.is_major_release }}
+      current_version: ${{ inputs.current_version }}
+      previous_version: ${{ inputs.previous_version }}
+      fork_url: ${{ inputs.fork_url }}
+      run_mode: ${{ inputs.run_mode }}
+      should_run_steps_1_6: ${{ steps.determine-flow.outputs.should_run_steps_1_6 }}
+      should_run_pr_security: ${{ steps.determine-flow.outputs.should_run_pr_security }}
+      should_run_infrastructure: ${{ steps.determine-flow.outputs.should_run_infrastructure }}
+      should_run_release_images: ${{ steps.determine-flow.outputs.should_run_release_images }}
+      should_run_asimov: ${{ steps.determine-flow.outputs.should_run_asimov }}
+    steps:
+      - name: Validate version format
+        run: |
+          if [[ ! "${{ inputs.current_version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Invalid current version format: ${{ inputs.current_version }}"
+            exit 1
+          fi
+          if [[ ! "${{ inputs.previous_version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Invalid previous version format: ${{ inputs.previous_version }}"
+            exit 1
+          fi
+          echo "✅ Version formats are valid"
+
+      - name: Check version logic
+        id: version-check
+        run: |
+          current="${{ inputs.current_version }}"
+          previous="${{ inputs.previous_version }}"
+          
+          IFS='.' read -r curr_major curr_minor curr_patch <<< "$current"
+          IFS='.' read -r prev_major prev_minor prev_patch <<< "$previous"
+          
+          is_major="false"
+          if [[ "$curr_major" != "$prev_major" ]] || [[ "$curr_minor" != "$prev_minor" && "$curr_patch" == "0" ]]; then
+            is_major="true"
+          fi
+          
+          echo "is_major_release=$is_major" >> $GITHUB_OUTPUT
+          echo "🔍 Release type: $([ "$is_major" == "true" ] && echo "MAJOR" || echo "MINOR")"
+
+      - name: Determine execution flow
+        id: determine-flow
+        run: |
+          mode="${{ inputs.run_mode }}"
+          
+          case "$mode" in
+            "full_automation")
+              echo "should_run_steps_1_6=true" >> $GITHUB_OUTPUT
+              echo "should_run_pr_security=true" >> $GITHUB_OUTPUT
+              echo "should_run_infrastructure=true" >> $GITHUB_OUTPUT
+              echo "should_run_release_images=true" >> $GITHUB_OUTPUT
+              echo "should_run_asimov=true" >> $GITHUB_OUTPUT
+              ;;
+            "steps_1_to_6")
+              echo "should_run_steps_1_6=true" >> $GITHUB_OUTPUT
+              echo "should_run_pr_security=false" >> $GITHUB_OUTPUT
+              echo "should_run_infrastructure=false" >> $GITHUB_OUTPUT
+              echo "should_run_release_images=false" >> $GITHUB_OUTPUT
+              echo "should_run_asimov=false" >> $GITHUB_OUTPUT
+              ;;
+            "steps_only")
+              echo "should_run_steps_1_6=true" >> $GITHUB_OUTPUT
+              echo "should_run_pr_security=false" >> $GITHUB_OUTPUT
+              echo "should_run_infrastructure=false" >> $GITHUB_OUTPUT
+              echo "should_run_release_images=false" >> $GITHUB_OUTPUT
+              echo "should_run_asimov=false" >> $GITHUB_OUTPUT
+              ;;
+            "pr_and_security")
+              echo "should_run_steps_1_6=false" >> $GITHUB_OUTPUT
+              echo "should_run_pr_security=true" >> $GITHUB_OUTPUT
+              echo "should_run_infrastructure=false" >> $GITHUB_OUTPUT
+              echo "should_run_release_images=false" >> $GITHUB_OUTPUT
+              echo "should_run_asimov=false" >> $GITHUB_OUTPUT
+              ;;
+            "infrastructure_only")
+              echo "should_run_steps_1_6=false" >> $GITHUB_OUTPUT
+              echo "should_run_pr_security=false" >> $GITHUB_OUTPUT
+              echo "should_run_infrastructure=true" >> $GITHUB_OUTPUT
+              echo "should_run_release_images=false" >> $GITHUB_OUTPUT
+              echo "should_run_asimov=false" >> $GITHUB_OUTPUT
+              ;;
+            "release_images_only")
+              echo "should_run_steps_1_6=false" >> $GITHUB_OUTPUT
+              echo "should_run_pr_security=false" >> $GITHUB_OUTPUT
+              echo "should_run_infrastructure=false" >> $GITHUB_OUTPUT
+              echo "should_run_release_images=true" >> $GITHUB_OUTPUT
+              echo "should_run_asimov=false" >> $GITHUB_OUTPUT
+              ;;
+            "post_pr_workflow")
+              echo "should_run_steps_1_6=false" >> $GITHUB_OUTPUT
+              echo "should_run_pr_security=false" >> $GITHUB_OUTPUT
+              echo "should_run_infrastructure=true" >> $GITHUB_OUTPUT
+              echo "should_run_release_images=true" >> $GITHUB_OUTPUT
+              echo "should_run_asimov=true" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+  # Steps 1, 2, 5: Branch creation, TOML update, Package model
+  steps-1-2-5:
+    runs-on: ubuntu-latest
+    needs: validate-inputs
+    if: needs.validate-inputs.outputs.should_run_steps_1_6 == 'true'
+    outputs:
+      success: ${{ steps.run-steps.outputs.success }}
+    steps:
+      - name: Checkout automation code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements_agent.txt
+          pip install boto3 requests toml pyyaml
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "AutoGluon Automation"
+          git config --global user.email "automation@autogluon.ai"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: Run Steps 1, 2, 5
+        id: run-steps
+        run: |
+          python enhanced_main_automation.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" \
+            --steps-125
+          
+          echo "success=true" >> $GITHUB_OUTPUT
+
+      - name: Upload automation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: steps-125-artifacts
+          path: |
+            logs/
+            *.tar.gz
+          retention-days: 7
+
+  # Steps 3, 4: Docker resources and Buildspec updates
+  steps-3-4:
+    runs-on: ubuntu-latest
+    needs: [validate-inputs, steps-1-2-5]
+    if: needs.validate-inputs.outputs.should_run_steps_1_6 == 'true' && needs.steps-1-2-5.outputs.success == 'true'
+    outputs:
+      success: ${{ steps.run-steps.outputs.success }}
+    steps:
+      - name: Checkout automation code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements_agent.txt
+          pip install boto3 requests toml pyyaml
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: Run Steps 3, 4
+        id: run-steps
+        run: |
+          python enhanced_main_automation.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" \
+            --steps-34
+          
+          echo "success=true" >> $GITHUB_OUTPUT
+
+      - name: Upload automation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: steps-34-artifacts
+          path: |
+            logs/
+          retention-days: 7
+
+  # Step 6: Docker Build and Upload
+  step-6:
+    runs-on: ubuntu-latest
+    needs: [validate-inputs, steps-1-2-5, steps-3-4]
+    if: needs.validate-inputs.outputs.should_run_steps_1_6 == 'true' && needs.steps-3-4.outputs.success == 'true'
+    outputs:
+      success: ${{ steps.run-step-6.outputs.success }}
+    steps:
+      - name: Checkout automation code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements_agent.txt
+          pip install boto3 requests toml pyyaml
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run Step 6 with Testing
+        id: run-step-6
+        run: |
+          # Run step 6 with integrated testing
+          python enhanced_main_automation.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" \
+            --step-6-only
+          
+          echo "success=true" >> $GITHUB_OUTPUT
+
+      - name: Run Testing Agents
+        if: inputs.enable_testing
+        run: |
+          echo "🧪 Running Testing Agents..."
+          
+          # Run Pip Check Agent
+          python pip_check_agent.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" || true
+          
+          # Run AutoGluon Test Agent  
+          python autogluon_test_agent.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" || true
+          
+          # Run SageMaker Test Agent
+          python sagemaker_test_agent.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" || true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: step-6-artifacts
+          path: |
+            logs/
+          retention-days: 7
+
+  # Step 7: PR Creation with Security Analysis
+  pr-and-security:
+    runs-on: ubuntu-latest
+    needs: [validate-inputs, step-6]
+    if: always() && (needs.validate-inputs.outputs.should_run_pr_security == 'true' && (needs.step-6.outputs.success == 'true' || needs.validate-inputs.outputs.should_run_steps_1_6 == 'false'))
+    outputs:
+      success: ${{ steps.create-pr.outputs.success }}
+      pr_number: ${{ steps.create-pr.outputs.pr_number }}
+    steps:
+      - name: Checkout automation code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements_agent.txt
+          pip install boto3 requests langchain-aws langchain-core pydantic
+
+      - name: Configure AWS credentials for Bedrock
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.BEDROCK_AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.BEDROCK_AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.BEDROCK_REGION }}
+
+      - name: Create PR with Security Analysis
+        id: create-pr
+        run: |
+          python enhanced_main_automation.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" \
+            --create-pr
+          
+          echo "success=true" >> $GITHUB_OUTPUT
+          
+          # Extract PR number from logs if available
+          if [ -f "logs/github_pr/github_pr_*.txt" ]; then
+            pr_number=$(grep -o "PR #[0-9]*" logs/github_pr/github_pr_*.txt | head -1 | sed 's/PR #//')
+            echo "pr_number=$pr_number" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload PR artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-security-artifacts
+          path: |
+            logs/
+          retention-days: 7
+
+  # Manual approval gate for infrastructure deployment
+  approval-gate:
+    runs-on: ubuntu-latest
+    needs: [validate-inputs, pr-and-security]
+    if: needs.validate-inputs.outputs.should_run_infrastructure == 'true' && needs.pr-and-security.outputs.success == 'true'
+    environment: 
+      name: production-deployment
+    steps:
+      - name: Manual approval required
+        run: |
+          echo "🚦 Manual approval required for infrastructure deployment"
+          echo "PR Number: ${{ needs.pr-and-security.outputs.pr_number }}"
+          echo "Please review the PR and approve this workflow to continue with infrastructure deployment"
+
+  # Step 8: Infrastructure Deployment
+  infrastructure-deployment:
+    runs-on: ubuntu-latest
+    needs: [validate-inputs, approval-gate]
+    if: always() && (needs.validate-inputs.outputs.should_run_infrastructure == 'true' && (needs.approval-gate.result == 'success' || needs.validate-inputs.outputs.should_run_pr_security == 'false'))
+    outputs:
+      success: ${{ steps.deploy-infrastructure.outputs.success }}
+    steps:
+      - name: Checkout automation code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements_agent.txt
+          pip install boto3 requests toml pyyaml
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: Setup Brazil workspace (if needed)
+        run: |
+          # Install Brazil CLI if needed
+          # This may need to be customized based on your Brazil setup
+          echo "Setting up Brazil workspace dependencies..."
+
+      - name: Deploy Infrastructure
+        id: deploy-infrastructure
+        run: |
+          python enhanced_main_automation.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" \
+            --infrastructure
+          
+          echo "success=true" >> $GITHUB_OUTPUT
+
+      - name: Upload infrastructure artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: infrastructure-artifacts
+          path: |
+            logs/
+          retention-days: 7
+
+  # Release Images Automation
+  release-images:
+    runs-on: ubuntu-latest
+    needs: [validate-inputs, infrastructure-deployment]
+    if: always() && (needs.validate-inputs.outputs.should_run_release_images == 'true' && (needs.infrastructure-deployment.outputs.success == 'true' || needs.validate-inputs.outputs.should_run_infrastructure == 'false'))
+    outputs:
+      success: ${{ steps.release-images.outputs.success }}
+    steps:
+      - name: Checkout automation code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements_agent.txt
+          pip install boto3 requests pyyaml
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: Run Release Images Automation
+        id: release-images
+        run: |
+          python enhanced_main_automation.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" \
+            --release-images
+          
+          echo "success=true" >> $GITHUB_OUTPUT
+
+      - name: Upload release images artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-images-artifacts
+          path: |
+            logs/
+          retention-days: 7
+
+  # Asimov Security Scan
+  asimov-security-scan:
+    runs-on: ubuntu-latest
+    needs: [validate-inputs, release-images]
+    if: always() && (needs.validate-inputs.outputs.should_run_asimov == 'true' && (needs.release-images.outputs.success == 'true' || needs.validate-inputs.outputs.should_run_release_images == 'false'))
+    outputs:
+      success: ${{ steps.asimov-scan.outputs.success }}
+    steps:
+      - name: Checkout automation code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements_agent.txt
+          pip install boto3 requests
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: Setup Brazil workspace for Asimov
+        run: |
+          echo "Setting up Brazil workspace for Asimov security scan..."
+
+      - name: Run Asimov Security Scan
+        id: asimov-scan
+        run: |
+          python enhanced_main_automation.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" \
+            --asimov-scan
+          
+          echo "success=true" >> $GITHUB_OUTPUT
+
+      - name: Upload Asimov artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: asimov-scan-artifacts
+          path: |
+            logs/
+          retention-days: 7
+
+  # Final Summary
+  summary:
+    runs-on: ubuntu-latest
+    needs: [validate-inputs, steps-1-2-5, steps-3-4, step-6, pr-and-security, infrastructure-deployment, release-images, asimov-security-scan]
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+
+      - name: Generate Summary Report
+        run: |
+          echo "# 🤖 AutoGluon Release Automation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ inputs.current_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Previous Version:** ${{ inputs.previous_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Release Type:** ${{ needs.validate-inputs.outputs.is_major_release == 'true' && 'Major' || 'Minor' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Run Mode:** ${{ inputs.run_mode }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Execution Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Status | Details |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+          
+          # Steps 1-2-5
+          if [ "${{ needs.steps-1-2-5.result }}" == "success" ]; then
+            echo "| Steps 1,2,5 | ✅ Success | Branch creation, TOML update, Package model |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.validate-inputs.outputs.should_run_steps_1_6 }}" == "true" ]; then
+            echo "| Steps 1,2,5 | ❌ Failed | Branch creation, TOML update, Package model |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Steps 1,2,5 | ⏭️ Skipped | Not requested |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Steps 3-4
+          if [ "${{ needs.steps-3-4.result }}" == "success" ]; then
+            echo "| Steps 3,4 | ✅ Success | Docker resources, Buildspec updates |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.validate-inputs.outputs.should_run_steps_1_6 }}" == "true" ]; then
+            echo "| Steps 3,4 | ❌ Failed | Docker resources, Buildspec updates |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Steps 3,4 | ⏭️ Skipped | Not requested |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Step 6
+          if [ "${{ needs.step-6.result }}" == "success" ]; then
+            echo "| Step 6 | ✅ Success | Docker build and upload |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.validate-inputs.outputs.should_run_steps_1_6 }}" == "true" ]; then
+            echo "| Step 6 | ❌ Failed | Docker build and upload |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Step 6 | ⏭️ Skipped | Not requested |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # PR and Security
+          if [ "${{ needs.pr-and-security.result }}" == "success" ]; then
+            echo "| PR & Security | ✅ Success | PR creation with AI security analysis |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.validate-inputs.outputs.should_run_pr_security }}" == "true" ]; then
+            echo "| PR & Security | ❌ Failed | PR creation with AI security analysis |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| PR & Security | ⏭️ Skipped | Not requested |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Infrastructure
+          if [ "${{ needs.infrastructure-deployment.result }}" == "success" ]; then
+            echo "| Infrastructure | ✅ Success | Brazil workspace deployment |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.validate-inputs.outputs.should_run_infrastructure }}" == "true" ]; then
+            echo "| Infrastructure | ❌ Failed | Brazil workspace deployment |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Infrastructure | ⏭️ Skipped | Not requested |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Release Images
+          if [ "${{ needs.release-images.result }}" == "success" ]; then
+            echo "| Release Images | ✅ Success | YAML and documentation updates |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.validate-inputs.outputs.should_run_release_images }}" == "true" ]; then
+            echo "| Release Images | ❌ Failed | YAML and documentation updates |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Release Images | ⏭️ Skipped | Not requested |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Asimov Scan
+          if [ "${{ needs.asimov-security-scan.result }}" == "success" ]; then
+            echo "| Asimov Scan | ✅ Success | Security scan workspace setup |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.validate-inputs.outputs.should_run_asimov }}" == "true" ]; then
+            echo "| Asimov Scan | ❌ Failed | Security scan workspace setup |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Asimov Scan | ⏭️ Skipped | Not requested |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📁 Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "All logs and artifacts have been uploaded and are available for download." >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.pr-and-security.outputs.pr_number }}" != "" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## 🔗 Pull Request" >> $GITHUB_STEP_SUMMARY
+            echo "PR #${{ needs.pr-and-security.outputs.pr_number }} has been created." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Notify on completion
+        if: always()
+        run: |
+          echo "🎉 AutoGluon Release Automation completed!"
+          echo "Check the summary above for detailed results."

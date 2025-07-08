@@ -1,0 +1,45 @@
+# AutoGluon Release Automation - CI/CD Requirements
+# This file contains all Python dependencies needed for GitHub Actions
+
+# Core dependencies
+boto3>=1.34.0
+requests>=2.31.0
+pyyaml>=6.0
+pathlib2>=2.3.7
+
+# AI/ML dependencies for agents
+langchain-aws>=0.1.0
+langchain-core>=0.1.0  
+langchain-community>=0.0.1
+pydantic>=1.10.0
+
+# Docker and containerization
+docker>=6.0.0
+
+# Testing and validation
+pytest>=7.0.0
+pytest-timeout>=2.1.0
+
+# Data processing
+pandas>=1.5.0
+numpy>=1.24.0
+
+# Configuration and parsing
+toml>=0.10.2
+configparser>=5.3.0
+
+# Networking and HTTP
+urllib3>=1.26.0
+certifi>=2023.7.22
+
+# Logging and monitoring
+python-dateutil>=2.8.2
+
+# Brazil workspace (if available)
+# Note: Brazil CLI needs to be installed separately in the runner
+
+# Development and debugging
+ipython>=8.0.0
+
+# Version management
+packaging>=21.0

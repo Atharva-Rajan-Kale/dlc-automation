@@ -18,6 +18,8 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
     Automation for updating release_images files and available_images.md with AutoGluon configuration
     """
     PRODUCTION_ACCOUNT_ID = '763104351884'
+    DEFAULT_REGION = 'us-west-2'  # Updated to use us-west-2 as default
+    
     def __init__(self, current_version: str, previous_version: str, fork_url: str):
         super().__init__(current_version, previous_version, fork_url)
         self.training_file = self.repo_dir / "release_images_training.yml"
@@ -108,6 +110,56 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
         except Exception as e:
             self.logger.error(f"❌ Failed to get images from {repo_name}: {e}")
             return {}
+
+    def construct_image_urls_by_type(self, reference_image_info: Dict) -> Dict[str, Dict]:
+        """Construct image URLs for both training and inference, GPU and CPU using the specified pattern"""
+        self.logger.info("🔧 Constructing image URLs using specified pattern...")
+        
+        region = os.environ.get('REGION', self.DEFAULT_REGION)
+        account_id = self.PRODUCTION_ACCOUNT_ID
+        
+        # Extract version info from reference image
+        python_version = reference_image_info['python_versions'][0]
+        cuda_version = reference_image_info['cuda_version']
+        os_version = reference_image_info['os_version']
+        
+        self.logger.info(f"📋 Using extracted info - Python: {python_version}, CUDA: {cuda_version}, OS: {os_version}")
+        
+        constructed_images = {
+            'training': {},
+            'inference': {}
+        }
+        
+        # Construct URLs for training and inference, both GPU and CPU
+        for job_type in ['training', 'inference']:
+            # GPU image
+            gpu_tag = f"{self.current_version}-gpu-{python_version}-{cuda_version}-{os_version}"
+            gpu_uri = f"{account_id}.dkr.ecr.{region}.amazonaws.com/autogluon-{job_type}:{gpu_tag}"
+            
+            constructed_images[job_type]['gpu'] = {
+                'image_uri': gpu_uri,
+                'tag': gpu_tag,
+                'python_versions': [python_version],
+                'cuda_version': cuda_version,
+                'os_version': os_version
+            }
+            
+            # CPU image (no CUDA version)
+            cpu_tag = f"{self.current_version}-cpu-{python_version}-{os_version}"
+            cpu_uri = f"{account_id}.dkr.ecr.{region}.amazonaws.com/autogluon-{job_type}:{cpu_tag}"
+            
+            constructed_images[job_type]['cpu'] = {
+                'image_uri': cpu_uri,
+                'tag': cpu_tag,
+                'python_versions': [python_version],
+                'cuda_version': '',
+                'os_version': os_version
+            }
+            
+            self.logger.info(f"📦 Constructed {job_type} GPU URL: {gpu_uri}")
+            self.logger.info(f"📦 Constructed {job_type} CPU URL: {cpu_uri}")
+        
+        return constructed_images
         
     def get_latest_autogluon_images(self, repo_name: str, count: int = 2, account_id: str = None, gpu_only: bool = False) -> list[Dict]:
         """Get the latest N images from any autogluon repository (beta or production) - Legacy method"""
@@ -172,28 +224,34 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
         return py_version
     
     def update_available_images_md(self, training_images: Dict[str, Dict], inference_images: Dict[str, Dict]) -> bool:
-        """Update available_images.md with new AutoGluon version information"""
+        """Update available_images.md with new AutoGluon version information using constructed URLs"""
         try:
-            self.logger.info("📝 Updating available_images.md...")
+            self.logger.info("📝 Updating available_images.md with constructed URLs...")
             if not self.available_images_file.exists():
                 self.logger.error(f"❌ File not found: {self.available_images_file}")
                 return False
             with open(self.available_images_file, 'r') as f:
                 content = f.read()
             self.logger.info(f"📋 Original file size: {len(content)} characters")
+            
             if not isinstance(training_images, dict) or not isinstance(inference_images, dict):
                 self.logger.error(f"❌ Expected dictionaries but got: training_images={type(training_images)}, inference_images={type(inference_images)}")
                 return False
+            
             if 'gpu' not in training_images or 'gpu' not in inference_images:
+                self.logger.error("❌ GPU images not found in training or inference images")
                 return False
+            
             if self.is_major_release:
                 self.logger.info("🔄 Major version update detected - moving current to Prior sections")
                 content = self.move_current_to_prior(content)
-            content = self.update_main_sections_with_actual_images(content, training_images, inference_images)
+            
+            content = self.update_main_sections_with_constructed_urls(content, training_images, inference_images)
             self.logger.info(f"📋 Updated file size: {len(content)} characters")
+            
             with open(self.available_images_file, 'w') as f:
                 f.write(content)
-            self.logger.info("✅ available_images.md updated successfully")
+            self.logger.info("✅ available_images.md updated successfully with constructed URLs")
             return True
         except Exception as e:
             self.logger.error(f"❌ Failed to update available_images.md: {e}")
@@ -267,11 +325,12 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
             i += 1
         return section_lines if found_section else []
     
-    def update_main_sections_with_actual_images(self, content: str, training_images: Dict[str, Dict], inference_images: Dict[str, Dict]) -> str:
-        """Update the main AutoGluon sections with actual image URIs"""
+    def update_main_sections_with_constructed_urls(self, content: str, training_images: Dict[str, Dict], inference_images: Dict[str, Dict]) -> str:
+        """Update the main AutoGluon sections with constructed image URLs"""
         lines = content.split('\n')
         new_lines = []
-        self.logger.info("🔍 Updating main sections with actual image URIs")
+        self.logger.info("🔍 Updating main sections with constructed image URLs")
+        
         autogluon_lines = []
         for i, line in enumerate(lines):
             if "AutoGluon" in line and "Containers" in line:
@@ -280,6 +339,7 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
             self.logger.info(f"📋 Found {len(autogluon_lines)} AutoGluon container sections:")
             for line in autogluon_lines:
                 self.logger.info(f"   {line}")
+        
         training_section_found = False
         inference_section_found = False
         i = 0
@@ -293,12 +353,14 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
                 new_lines.append("")  
                 new_lines.append("| Framework       | AutoGluon Version  | Job Type | CPU/GPU | Python Version Options | Example URL                                                                                      |")
                 new_lines.append("|-----------------|--------------------|----------|---------|------------------------|--------------------------------------------------------------------------------------------------|")
+                
                 if 'gpu' in training_images:
-                    gpu_row = self.create_table_row_with_actual_uri(training_images['gpu'], "training", "GPU")
+                    gpu_row = self.create_table_row_with_constructed_url(training_images['gpu'], "training", "GPU")
                     new_lines.append(gpu_row)
                 if 'cpu' in training_images:
-                    cpu_row = self.create_table_row_with_actual_uri(training_images['cpu'], "training", "CPU")
+                    cpu_row = self.create_table_row_with_constructed_url(training_images['cpu'], "training", "CPU")
                     new_lines.append(cpu_row)
+                
                 i += 1
                 while i < len(lines):
                     next_line = lines[i].strip()
@@ -310,6 +372,7 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
                         break
                     i += 1
                 continue
+                
             elif line.strip() == "AutoGluon Inference Containers":
                 self.logger.info(f"📝 Found AutoGluon Inference Containers section at line {i}")
                 inference_section_found = True
@@ -318,12 +381,14 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
                 new_lines.append("") 
                 new_lines.append("| Framework       | AutoGluon Version  | Job Type  | CPU/GPU | Python Version Options | Example URL                                                                                       |")
                 new_lines.append("|-----------------|--------------------|-----------|---------|------------------------|---------------------------------------------------------------------------------------------------|")
+                
                 if 'gpu' in inference_images:
-                    gpu_row = self.create_table_row_with_actual_uri(inference_images['gpu'], "inference", "GPU")
+                    gpu_row = self.create_table_row_with_constructed_url(inference_images['gpu'], "inference", "GPU")
                     new_lines.append(gpu_row)
                 if 'cpu' in inference_images:
-                    cpu_row = self.create_table_row_with_actual_uri(inference_images['cpu'], "inference", "CPU")
+                    cpu_row = self.create_table_row_with_constructed_url(inference_images['cpu'], "inference", "CPU")
                     new_lines.append(cpu_row)
+                
                 i += 1
                 while i < len(lines):
                     next_line = lines[i].strip()
@@ -354,8 +419,17 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
                 if "AutoGluon Inference" in line:
                     self.logger.warning(f"  Line {i}: '{line.strip()}'")
             
-        self.logger.info(f"✅ Main sections updated. Lines: {len(lines)} -> {len(new_lines)}")
+        self.logger.info(f"✅ Main sections updated with constructed URLs. Lines: {len(lines)} -> {len(new_lines)}")
         return '\n'.join(new_lines)
+    
+    def create_table_row_with_constructed_url(self, image_info: Dict, job_type: str, compute_type: str) -> str:
+        """Create a table row using the constructed image URL"""
+        python_version = self.convert_python_version(image_info['python_versions'][0])
+        constructed_url = image_info['image_uri']
+        
+        self.logger.info(f"📋 Creating {job_type} {compute_type} row with constructed URL: {constructed_url}")
+        
+        return f"| AutoGluon {self.current_version} | {self.current_version}              | {job_type} | {compute_type}     | {python_version} ({image_info['python_versions'][0]})             | {constructed_url} |"
     
     def create_table_row_with_actual_uri(self, image_info: Dict, job_type: str, compute_type: str) -> str:
         """Create a table row using the actual image URI extracted from repository"""
@@ -672,28 +746,36 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
             if not self.pr_automation.create_pull_request():
                 raise Exception("Failed to create Revert Pull Request")
             self.wait_for_pr_merge("YAML revert")
+            
+            # Updated section: construct URLs instead of fetching from production
             print("📝 Starting available_images.md update process...")
-            print("🔍 Extracting actual image tags from production repositories...")
+            print("🔧 Constructing image URLs using specified pattern...")
             print(f"📋 Using production account ID: {self.PRODUCTION_ACCOUNT_ID}")
-            training_images = self.get_latest_autogluon_images_by_type('autogluon-training', self.PRODUCTION_ACCOUNT_ID)
-            inference_images = self.get_latest_autogluon_images_by_type('autogluon-inference', self.PRODUCTION_ACCOUNT_ID)
+            print(f"📋 Using region: {os.environ.get('REGION', self.DEFAULT_REGION)}")
+            
+            # Construct URLs using the pattern instead of fetching from repositories
+            constructed_images = self.construct_image_urls_by_type(image_info)
+            training_images = constructed_images['training']
+            inference_images = constructed_images['inference']
+            
             if not training_images or not inference_images:
-                raise Exception("Failed to get sufficient images from production repositories")
-            print(f"📦 Found training images: {list(training_images.keys()) if isinstance(training_images, dict) else type(training_images)}")
-            print(f"📦 Found inference images: {list(inference_images.keys()) if isinstance(inference_images, dict) else type(inference_images)}")
+                raise Exception("Failed to construct sufficient image URLs")
+            print(f"📦 Constructed training images: {list(training_images.keys()) if isinstance(training_images, dict) else type(training_images)}")
+            print(f"📦 Constructed inference images: {list(inference_images.keys()) if isinstance(inference_images, dict) else type(inference_images)}")
             for img_type, img_data in training_images.items():
-                self.logger.info(f"📦 Training {img_type} image URI: {img_data.get('image_uri', 'N/A')}")
+                self.logger.info(f"📦 Training {img_type} constructed URL: {img_data.get('image_uri', 'N/A')}")
             for img_type, img_data in inference_images.items():
-                self.logger.info(f"📦 Inference {img_type} image URI: {img_data.get('image_uri', 'N/A')}")
+                self.logger.info(f"📦 Inference {img_type} constructed URL: {img_data.get('image_uri', 'N/A')}")
+            
             self.backup_available_images_file()
-            print("📝 Updating available_images.md with actual image URIs from repositories...")
+            print("📝 Updating available_images.md with constructed image URLs...")
             if not self.update_available_images_md(training_images, inference_images):
                 raise Exception("Failed to update available_images.md")
-            print("✅ available_images.md updated successfully with actual image URIs")
+            print("✅ available_images.md updated successfully with constructed image URLs")
             if not self.prompt_user("Commit and create PR with available_images.md changes?"):
                 print("❌ Operation cancelled by user")
                 return False
-            available_images_commit_message = f"AutoGluon {self.current_version}: Update available images documentation with actual image URIs"
+            available_images_commit_message = f"AutoGluon {self.current_version}: Update available images documentation with constructed URLs"
             if not self.commit_and_push_available_images_changes(available_images_commit_message):
                 raise Exception("Failed to commit and push available_images.md changes")
             print("🚀 Creating Pull Request for available_images.md...")
@@ -703,7 +785,7 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
             print("✅ AutoGluon Release Images Automation completed successfully!")
             print("📋 Summary:")
             print("   - YAML files: Updated and reverted (temporary)")
-            print("   - available_images.md: Updated permanently with actual image URIs from repositories")
+            print("   - available_images.md: Updated permanently with constructed image URLs")
             print("   - Total PRs created: 3")
             return True
         except Exception as e:
