@@ -117,8 +117,7 @@ jobs:
             --job-name "autogluon-release-${{ inputs.workflow_type }}-${{ github.run_number }}" \
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
             --job-definition "${{ secrets.BATCH_JOB_DEFINITION }}" \
-            --parameters currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}",jobParams="$JOB_PARAMS" \
-            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}}]' \
+            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=jobParams,value=$JOB_PARAMS}]' \
             --query 'jobId' --output text)
           
           echo "job-id=$JOB_ID" >> $GITHUB_OUTPUT

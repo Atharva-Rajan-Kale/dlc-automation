@@ -129,8 +129,7 @@ jobs:
             --job-name "pip-check-${{ github.run_number }}" \
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
             --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
-            --parameters testType="pip-check",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
-            --container-overrides environment='[{"name":"GITHUB_TOKEN","value":"${{ secrets.TOKEN }}"}]' \
+            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=testType,value=pip-check}]' \
             --query 'jobId' --output text)
           
           while true; do
@@ -170,8 +169,7 @@ jobs:
             --job-name "autogluon-tests-${{ github.run_number }}" \
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
             --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
-            --parameters testType="autogluon-tests",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
-            --container-overrides environment='[{"name":"GITHUB_TOKEN","value":"${{ secrets.TOKEN }}"}]' \
+            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=testType,value=autogluon-tests}]' \
             --query 'jobId' --output text)
           
           while true; do
@@ -211,8 +209,7 @@ jobs:
             --job-name "sagemaker-tests-${{ github.run_number }}" \
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
             --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
-            --parameters testType="sagemaker-tests",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
-            --container-overrides environment='[{"name":"GITHUB_TOKEN","value":"${{ secrets.TOKEN }}"}]' \
+            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=testType,value=sagemaker-tests}]' \
             --query 'jobId' --output text)
           
           while true; do
@@ -252,8 +249,7 @@ jobs:
             --job-name "security-tests-${{ github.run_number }}" \
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
             --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
-            --parameters testType="security-tests",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
-            --container-overrides environment='[{"name":"GITHUB_TOKEN","value":"${{ secrets.TOKEN }}"}]' \
+            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=testType,value=security-tests}]' \
             --query 'jobId' --output text)
           
           while true; do
@@ -293,8 +289,7 @@ jobs:
             --job-name "quick-checks-${{ github.run_number }}" \
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
             --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
-            --parameters testType="quick-checks",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
-            --container-overrides environment='[{"name":"GITHUB_TOKEN","value":"${{ secrets.TOKEN }}"}]' \
+            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=testType,value=quick-checks}]' \
             --query 'jobId' --output text)
           
           while true; do
