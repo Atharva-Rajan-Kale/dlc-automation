@@ -17,11 +17,12 @@ class Step6Automation(BaseAutomation, LoggerMixin):
         """Clean Docker layers between builds to prevent space issues"""
         self.logger.info("🧹 Cleaning Docker layers between builds...")
         
+        # First, try standard cleanup
         cleanup_commands = [
-            ['docker', 'image', 'prune', '-f'],
-            ['docker', 'builder', 'prune', '-f'], 
             ['docker', 'container', 'prune', '-f'],
-            ['docker', 'network', 'prune', '-f']
+            ['docker', 'network', 'prune', '-f'],
+            ['docker', 'image', 'prune', '-f'],
+            ['docker', 'builder', 'prune', '-f']
         ]
         
         for cmd in cleanup_commands:
@@ -32,12 +33,83 @@ class Step6Automation(BaseAutomation, LoggerMixin):
             except Exception as e:
                 self.logger.warning(f"Cleanup command failed: {' '.join(cmd)} - {e}")
         
-        # Show remaining Docker space
+        # Check if we still have reclaimable space
         try:
             result = self.run_subprocess_with_logging(['docker', 'system', 'df'], capture_output=True, text=True, check=False)
-            self.logger.info(f"Docker space after cleanup:\n{result.stdout}")
+            self.logger.info(f"Docker space after basic cleanup:\n{result.stdout}")
+            
+            # Parse the output to see if we have reclaimable space
+            if result.stdout and "RECLAIMABLE" in result.stdout:
+                lines = result.stdout.strip().split('\n')
+                for line in lines:
+                    if "Images" in line and "GB" in line and "(" in line:
+                        # Extract reclaimable space percentage
+                        if "%" in line:
+                            parts = line.split("(")
+                            if len(parts) > 1:
+                                percent_part = parts[1].split("%")[0]
+                                try:
+                                    reclaimable_percent = int(percent_part)
+                                    if reclaimable_percent > 50:  # If more than 50% is reclaimable
+                                        self.logger.warning(f"🚨 {reclaimable_percent}% Docker space is reclaimable - performing aggressive cleanup")
+                                        self.aggressive_image_cleanup()
+                                        break
+                                except:
+                                    pass
         except Exception as e:
             self.logger.warning(f"Could not check Docker space: {e}")
+
+    def aggressive_image_cleanup(self):
+        """Aggressively remove Docker images to free space"""
+        self.logger.warning("🚨 Performing aggressive Docker image cleanup...")
+        
+        try:
+            # Get list of all images except base ones
+            result = self.run_subprocess_with_logging(['docker', 'images', '--format', '{{.Repository}}:{{.Tag}}'], 
+                                                     capture_output=True, text=True, check=False)
+            
+            if result.stdout:
+                all_images = result.stdout.strip().split('\n')
+                images_to_keep = [
+                    'ubuntu', 'python', 'nvidia/cuda', 'amazon/aws-cli'
+                ]
+                
+                images_to_remove = []
+                for image in all_images:
+                    if image and image != '<none>:<none>':
+                        # Keep base images but remove AutoGluon builds
+                        should_keep = False
+                        for keep_pattern in images_to_keep:
+                            if keep_pattern in image.lower():
+                                should_keep = True
+                                break
+                        
+                        if not should_keep:
+                            images_to_remove.append(image)
+                
+                # Remove images in batches
+                if images_to_remove:
+                    self.logger.info(f"🗑️ Removing {len(images_to_remove)} Docker images to free space")
+                    
+                    # Remove images one by one to avoid command line length issues
+                    for image in images_to_remove:
+                        try:
+                            self.run_subprocess_with_logging(['docker', 'rmi', '-f', image], 
+                                                           capture_output=True, text=True, check=False)
+                        except:
+                            pass  # Continue even if some images fail to remove
+                    
+                    self.logger.info("✅ Aggressive image cleanup completed")
+                
+            # Final cleanup
+            self.run_subprocess_with_logging(['docker', 'system', 'prune', '-af'], check=False)
+            
+            # Show final space
+            result = self.run_subprocess_with_logging(['docker', 'system', 'df'], capture_output=True, text=True, check=False)
+            self.logger.info(f"Docker space after aggressive cleanup:\n{result.stdout}")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Aggressive image cleanup failed: {e}")
 
     def check_disk_space(self, stage=""):
         """Check and log current disk space"""
@@ -105,12 +177,12 @@ class Step6Automation(BaseAutomation, LoggerMixin):
             self.docker_cleanup_between_builds()
         
         try:
-            # Build the image - REMOVED the timeout parameter that was causing the error
+            # Build the image
             self.run_subprocess_with_logging(
                 build_args,
                 step_description=description,
-                capture_output=False
-                # Removed timeout=7200 as it's not supported by Popen
+                capture_output=False,
+                timeout=7200  # 2 hour timeout per image
             )
             
             self.logger.info(f"✅ {description} completed successfully")
@@ -123,6 +195,10 @@ class Step6Automation(BaseAutomation, LoggerMixin):
             
             return True
             
+        except subprocess.TimeoutExpired:
+            self.logger.error(f"❌ {description} timed out after 2 hours")
+            self.docker_cleanup_between_builds()
+            return False
         except subprocess.CalledProcessError as e:
             self.logger.error(f"❌ {description} failed with exit code {e.returncode}")
             self.docker_cleanup_between_builds()
