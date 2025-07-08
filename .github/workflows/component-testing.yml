@@ -1,0 +1,261 @@
+name: AutoGluon Component Testing
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: 'Component to test'
+        required: true
+        type: choice
+        options:
+          - 'pip_check_agent'
+          - 'autogluon_test_agent'
+          - 'sagemaker_test_agent'
+          - 'security_test_agent'
+          - 'quick_checks_agent'
+          - 'github_pr_automation'
+          - 'steps_1_2_5'
+          - 'steps_3_4'
+          - 'step_6'
+          - 'infrastructure'
+          - 'release_images'
+          - 'asimov_scan'
+        default: 'pip_check_agent'
+      current_version:
+        description: 'Current version (e.g., 1.4.0)'
+        required: true
+        type: string
+      previous_version:
+        description: 'Previous version (e.g., 1.3.0)'
+        required: true
+        type: string
+      fork_url:
+        description: 'Your fork URL'
+        required: true
+        type: string
+      debug_mode:
+        description: 'Enable debug logging'
+        required: true
+        type: boolean
+        default: true
+
+env:
+  PYTHON_VERSION: '3.11'
+  AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+  ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+  REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  
+  # Bedrock/AI Configuration
+  BEDROCK_MODEL_ID: ${{ secrets.BEDROCK_MODEL_ID || 'anthropic.claude-3-5-sonnet-20241022-v2:0' }}
+  BEDROCK_INFERENCE_PROFILE_ARN: ${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}
+  BEDROCK_AWS_ACCESS_KEY_ID: ${{ secrets.BEDROCK_AWS_ACCESS_KEY_ID }}
+  BEDROCK_AWS_SECRET_ACCESS_KEY: ${{ secrets.BEDROCK_AWS_SECRET_ACCESS_KEY }}
+  BEDROCK_REGION: ${{ secrets.BEDROCK_REGION || 'us-east-1' }}
+  
+  # CodeBuild Configuration
+  CODEBUILD_AWS_ACCESS_KEY_ID: ${{ secrets.CODEBUILD_AWS_ACCESS_KEY_ID }}
+  CODEBUILD_AWS_SECRET_ACCESS_KEY: ${{ secrets.CODEBUILD_AWS_SECRET_ACCESS_KEY }}
+  CODEBUILD_REGION: ${{ secrets.CODEBUILD_REGION || 'us-west-2' }}
+
+jobs:
+  test-component:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout automation code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install base dependencies
+        run: |
+          pip install --upgrade pip
+          pip install boto3 requests pyyaml pathlib
+
+      - name: Install AI dependencies (if needed)
+        if: contains(fromJSON('["security_test_agent", "pip_check_agent", "sagemaker_test_agent"]'), inputs.component)
+        run: |
+          pip install -r requirements_agent.txt
+          pip install langchain-aws langchain-core langchain-community pydantic
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "AutoGluon Test Automation"
+          git config --global user.email "test-automation@autogluon.ai"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: Setup Docker (if needed)
+        if: contains(fromJSON('["step_6", "autogluon_test_agent"]'), inputs.component)
+        uses: docker/setup-buildx-action@v3
+
+      - name: Enable debug logging
+        if: inputs.debug_mode
+        run: |
+          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
+          echo "DEBUG=1" >> $GITHUB_ENV
+
+      - name: Test Pip Check Agent
+        if: inputs.component == 'pip_check_agent'
+        run: |
+          echo "🧪 Testing Pip Check Agent..."
+          python pip_check_agent.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}"
+
+      - name: Test AutoGluon Test Agent
+        if: inputs.component == 'autogluon_test_agent'
+        run: |
+          echo "🧪 Testing AutoGluon Test Agent..."
+          python autogluon_test_agent.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}"
+
+      - name: Test SageMaker Test Agent
+        if: inputs.component == 'sagemaker_test_agent'
+        run: |
+          echo "🧪 Testing SageMaker Test Agent..."
+          python sagemaker_test_agent.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}"
+
+      - name: Test Security Test Agent
+        if: inputs.component == 'security_test_agent'
+        run: |
+          echo "🧪 Testing Security Test Agent..."
+          python security_test_agent.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}"
+
+      - name: Test Quick Checks Agent
+        if: inputs.component == 'quick_checks_agent'
+        run: |
+          echo "🧪 Testing Quick Checks Agent..."
+          python quick_checks_agent.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}"
+
+      - name: Test GitHub PR Automation
+        if: inputs.component == 'github_pr_automation'
+        run: |
+          echo "🧪 Testing GitHub PR Automation..."
+          python github_pr_automation.py \
+            --current-version "${{ inputs.current_version }}" \
+            --fork-url "${{ inputs.fork_url }}" \
+            --repo-dir "./test-repo"
+
+      - name: Test Steps 1, 2, 5
+        if: inputs.component == 'steps_1_2_5'
+        run: |
+          echo "🧪 Testing Steps 1, 2, 5..."
+          python enhanced_main_automation.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" \
+            --steps-125
+
+      - name: Test Steps 3, 4
+        if: inputs.component == 'steps_3_4'
+        run: |
+          echo "🧪 Testing Steps 3, 4..."
+          python enhanced_main_automation.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" \
+            --steps-34
+
+      - name: Test Step 6
+        if: inputs.component == 'step_6'
+        run: |
+          echo "🧪 Testing Step 6..."
+          python enhanced_main_automation.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" \
+            --step-6-only
+
+      - name: Test Infrastructure
+        if: inputs.component == 'infrastructure'
+        run: |
+          echo "🧪 Testing Infrastructure..."
+          python enhanced_main_automation.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" \
+            --infrastructure
+
+      - name: Test Release Images
+        if: inputs.component == 'release_images'
+        run: |
+          echo "🧪 Testing Release Images..."
+          python enhanced_main_automation.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" \
+            --release-images
+
+      - name: Test Asimov Scan
+        if: inputs.component == 'asimov_scan'
+        run: |
+          echo "🧪 Testing Asimov Scan..."
+          python enhanced_main_automation.py \
+            --current-version "${{ inputs.current_version }}" \
+            --previous-version "${{ inputs.previous_version }}" \
+            --fork-url "${{ inputs.fork_url }}" \
+            --asimov-scan
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-${{ inputs.component }}-artifacts
+          path: |
+            logs/
+            *.log
+            *.txt
+            **/*.log
+          retention-days: 7
+
+      - name: Generate test summary
+        if: always()
+        run: |
+          echo "# 🧪 Component Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Component:** ${{ inputs.component }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ inputs.current_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Debug Mode:** ${{ inputs.debug_mode }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ **Test passed successfully!**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Test failed. Check logs for details.**" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📁 Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "Test logs and artifacts are available for download." >> $GITHUB_STEP_SUMMARY
+          
+          # Show log summary if exists
+          if [ -d "logs" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## 📊 Log Files Generated" >> $GITHUB_STEP_SUMMARY
+            find logs -name "*.txt" -type f | head -10 | while read file; do
+              echo "- \`$file\`" >> $GITHUB_STEP_SUMMARY
+            done
+          fi
