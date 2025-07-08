@@ -99,7 +99,11 @@ jobs:
             --parameters analysisType="${{ needs.security-setup.outputs.analysis-type }}",currentVersion="$current_version",previousVersion="$previous_version",forkUrl="$fork_url",prNumber="${{ inputs.pr_number }}" \
             --query 'jobId' --output text)
           
-          aws batch wait job-execution-complete --jobs $JOB_ID
+          while true; do
+            STATUS=$(aws batch describe-jobs --jobs $JOB_ID --query 'jobs[0].status' --output text)
+            if [ "$STATUS" = "SUCCEEDED" ]; then break; elif [ "$STATUS" = "FAILED" ]; then exit 1; fi
+            sleep 30
+          done
           echo "✅ Security analysis completed: $JOB_ID"
 
       - name: Get Batch Job Results

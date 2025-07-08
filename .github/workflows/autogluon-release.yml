@@ -127,15 +127,20 @@ jobs:
         run: |
           echo "⏳ Waiting for batch job completion: ${{ steps.batch-job.outputs.job-id }}"
           
-          aws batch wait job-execution-complete --jobs ${{ steps.batch-job.outputs.job-id }}
-          
-          JOB_STATUS=$(aws batch describe-jobs --jobs ${{ steps.batch-job.outputs.job-id }} --query 'jobs[0].status' --output text)
-          echo "Job completed with status: $JOB_STATUS"
-          
-          if [ "$JOB_STATUS" != "SUCCEEDED" ]; then
-            echo "❌ Batch job failed"
-            exit 1
-          fi
+          while true; do
+            JOB_STATUS=$(aws batch describe-jobs --jobs ${{ steps.batch-job.outputs.job-id }} --query 'jobs[0].status' --output text)
+            echo "Current status: $JOB_STATUS"
+            
+            if [ "$JOB_STATUS" = "SUCCEEDED" ]; then
+              echo "✅ Job completed successfully"
+              break
+            elif [ "$JOB_STATUS" = "FAILED" ]; then
+              echo "❌ Job failed"
+              exit 1
+            fi
+            
+            sleep 30
+          done
 
       - name: Upload automation logs
         uses: actions/upload-artifact@v4
