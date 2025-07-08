@@ -13,6 +13,129 @@ class Step6Automation(BaseAutomation, LoggerMixin):
         super().__init__(current_version, previous_version, fork_url)
         self.setup_logging(current_version, custom_name="step_6")
 
+    def docker_cleanup_between_builds(self):
+        """Clean Docker layers between builds to prevent space issues"""
+        self.logger.info("🧹 Cleaning Docker layers between builds...")
+        
+        cleanup_commands = [
+            ['docker', 'image', 'prune', '-f'],
+            ['docker', 'builder', 'prune', '-f'], 
+            ['docker', 'container', 'prune', '-f'],
+            ['docker', 'network', 'prune', '-f']
+        ]
+        
+        for cmd in cleanup_commands:
+            try:
+                result = self.run_subprocess_with_logging(cmd, capture_output=True, text=True, check=False)
+                if result.stdout and result.stdout.strip():
+                    self.logger.info(f"Cleanup output: {result.stdout.strip()}")
+            except Exception as e:
+                self.logger.warning(f"Cleanup command failed: {' '.join(cmd)} - {e}")
+        
+        # Show remaining Docker space
+        try:
+            result = self.run_subprocess_with_logging(['docker', 'system', 'df'], capture_output=True, text=True, check=False)
+            self.logger.info(f"Docker space after cleanup:\n{result.stdout}")
+        except Exception as e:
+            self.logger.warning(f"Could not check Docker space: {e}")
+
+    def check_disk_space(self, stage=""):
+        """Check and log current disk space"""
+        try:
+            result = self.run_subprocess_with_logging(['df', '-h', '/'], capture_output=True, text=True, check=False)
+            if result.stdout:
+                lines = result.stdout.strip().split('\n')
+                if len(lines) > 1:
+                    header = lines[0]
+                    data = lines[1]
+                    self.logger.info(f"💾 Disk space {stage}:\n{header}\n{data}")
+                    
+                    # Extract usage percentage
+                    fields = data.split()
+                    if len(fields) >= 5:
+                        usage_percent = fields[4].rstrip('%')
+                        if usage_percent.isdigit() and int(usage_percent) > 85:
+                            self.logger.warning(f"⚠️ High disk usage: {usage_percent}%")
+                            return int(usage_percent)
+            return 0
+        except Exception as e:
+            self.logger.warning(f"Could not check disk space: {e}")
+            return 0
+
+    def aggressive_docker_cleanup(self):
+        """Perform aggressive Docker cleanup when space is critically low"""
+        self.logger.warning("🚨 Performing aggressive Docker cleanup due to low space...")
+        
+        try:
+            # Stop all containers
+            result = self.run_subprocess_with_logging(['docker', 'ps', '-q'], capture_output=True, text=True, check=False)
+            if result.stdout and result.stdout.strip():
+                container_ids = result.stdout.strip().split('\n')
+                self.run_subprocess_with_logging(['docker', 'stop'] + container_ids, check=False)
+                self.logger.info("🛑 Stopped all running containers")
+            
+            # Remove all containers
+            result = self.run_subprocess_with_logging(['docker', 'ps', '-aq'], capture_output=True, text=True, check=False)
+            if result.stdout and result.stdout.strip():
+                container_ids = result.stdout.strip().split('\n')
+                self.run_subprocess_with_logging(['docker', 'rm', '-f'] + container_ids, check=False)
+                self.logger.info("🗑️ Removed all containers")
+            
+            # Remove all images except base ones we might need
+            self.run_subprocess_with_logging(['docker', 'system', 'prune', '-af', '--volumes'], check=False)
+            self.logger.info("🧹 Aggressive system cleanup completed")
+            
+            # Check space after cleanup
+            self.check_disk_space("after aggressive cleanup")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Aggressive cleanup failed: {e}")
+
+    def build_single_image_safely(self, build_args, description):
+        """Build a single Docker image with proper error handling and cleanup"""
+        self.logger.info(f"🐳 Starting: {description}")
+        
+        # Check space before build
+        usage = self.check_disk_space(f"before {description}")
+        if usage > 90:
+            self.logger.warning(f"⚠️ Very low disk space ({usage}%) - performing aggressive cleanup")
+            self.aggressive_docker_cleanup()
+        elif usage > 80:
+            self.logger.warning(f"⚠️ Low disk space ({usage}%) - performing cleanup")
+            self.docker_cleanup_between_builds()
+        
+        try:
+            # Build the image
+            self.run_subprocess_with_logging(
+                build_args,
+                step_description=description,
+                capture_output=False,
+                timeout=7200  # 2 hour timeout per image
+            )
+            
+            self.logger.info(f"✅ {description} completed successfully")
+            
+            # Immediate cleanup after successful build
+            self.docker_cleanup_between_builds()
+            
+            # Check space after build
+            self.check_disk_space(f"after {description}")
+            
+            return True
+            
+        except subprocess.TimeoutExpired:
+            self.logger.error(f"❌ {description} timed out after 2 hours")
+            self.docker_cleanup_between_builds()
+            return False
+        except subprocess.CalledProcessError as e:
+            self.logger.error(f"❌ {description} failed with exit code {e.returncode}")
+            self.docker_cleanup_between_builds()
+            return False
+        except Exception as e:
+            self.logger.error(f"❌ {description} failed: {e}")
+            self.docker_cleanup_between_builds()
+            return False
+
     def step6_build_upload_docker(self):
         """Step 6: Fix code issues, build and upload Docker images to ECR"""
         self.logger.info("Step 6: Building and uploading Docker images")
@@ -127,8 +250,16 @@ class Step6Automation(BaseAutomation, LoggerMixin):
     def setup_build_environment(self, account_id: str, region: str):
         """Set up environment variables and dependencies"""
         self.logger.info("🛠️  Setting up build environment...")
+        
+        # Initial space check
+        self.check_disk_space("before setup")
+        
         try:
             self.logger.info(f"Using ACCOUNT_ID={account_id}, REGION={region}")
+            
+            # Initial Docker cleanup to start fresh
+            self.logger.info("🧹 Initial Docker cleanup...")
+            self.docker_cleanup_between_builds()
             
             # ECR login for user's account
             self.logger.info("🔐 Logging into your ECR...")
@@ -161,70 +292,116 @@ class Step6Automation(BaseAutomation, LoggerMixin):
             self.run_subprocess_with_logging(["bash", "src/setup.sh", "autogluon"])
             self.logger.info("✅ Setup script completed")
             
+            # Check space after setup
+            self.check_disk_space("after setup")
+            
             return True
         except Exception as e:
             self.logger.error(f"❌ Failed to setup build environment: {e}")
             return False
 
     def build_docker_images(self):
-        """Build and upload all Docker images with real-time output"""
-        self.logger.info("🏗️  Building Docker images...")
+        """Build and upload all Docker images with real-time output and space management"""
+        self.logger.info("🏗️  Building Docker images with space management...")
+        
+        # Initial space check and cleanup
+        self.check_disk_space("before Docker builds")
+        self.docker_cleanup_between_builds()
+        
         try:
-            # Training images
-            os.environ['REPOSITORY_NAME'] = 'beta-autogluon-training'
+            images_to_build = [
+                {
+                    'repo_name': 'beta-autogluon-training',
+                    'buildspec': 'autogluon/training/buildspec.yml',
+                    'image_type': 'training',
+                    'device': 'cpu',
+                    'description': 'Training CPU Image'
+                },
+                {
+                    'repo_name': 'beta-autogluon-training', 
+                    'buildspec': 'autogluon/training/buildspec.yml',
+                    'image_type': 'training',
+                    'device': 'gpu',
+                    'description': 'Training GPU Image'
+                },
+                {
+                    'repo_name': 'beta-autogluon-inference',
+                    'buildspec': 'autogluon/inference/buildspec.yml', 
+                    'image_type': 'inference',
+                    'device': 'cpu',
+                    'description': 'Inference CPU Image'
+                },
+                {
+                    'repo_name': 'beta-autogluon-inference',
+                    'buildspec': 'autogluon/inference/buildspec.yml',
+                    'image_type': 'inference', 
+                    'device': 'gpu',
+                    'description': 'Inference GPU Image'
+                }
+            ]
             
-            self.logger.info("Building training CPU image...")
-            self.run_subprocess_with_logging([
-                "dlc/bin/python", "src/main.py",
-                "--buildspec", "autogluon/training/buildspec.yml",
-                "--framework", "autogluon",
-                "--image_types", "training",
-                "--device_types", "cpu",
-                "--py_versions", "py3"
-            ], step_description="Building AutoGluon Training CPU Image", capture_output=False)
-            self.logger.info("✅ Training CPU image built")
+            successful_builds = []
+            failed_builds = []
             
-            self.logger.info("Building training GPU image...")
-            self.run_subprocess_with_logging([
-                "dlc/bin/python", "src/main.py",
-                "--buildspec", "autogluon/training/buildspec.yml",
-                "--framework", "autogluon",
-                "--image_types", "training",
-                "--device_types", "gpu",
-                "--py_versions", "py3"
-            ], step_description="Building AutoGluon Training GPU Image", capture_output=False)
-            self.logger.info("✅ Training GPU image built")
+            for i, config in enumerate(images_to_build, 1):
+                self.logger.info(f"📦 Building image {i}/{len(images_to_build)}: {config['description']}")
+                
+                # Set repository name environment variable
+                os.environ['REPOSITORY_NAME'] = config['repo_name']
+                
+                # Prepare build arguments
+                build_args = [
+                    "dlc/bin/python", "src/main.py",
+                    "--buildspec", config['buildspec'],
+                    "--framework", "autogluon",
+                    "--image_types", config['image_type'],
+                    "--device_types", config['device'],
+                    "--py_versions", "py3"
+                ]
+                
+                # Build the image with safety measures
+                success = self.build_single_image_safely(build_args, config['description'])
+                
+                if success:
+                    successful_builds.append(config['description'])
+                    self.logger.info(f"✅ Completed {i}/{len(images_to_build)}: {config['description']}")
+                else:
+                    failed_builds.append(config['description'])
+                    self.logger.error(f"❌ Failed {i}/{len(images_to_build)}: {config['description']}")
+                    
+                    # Decide whether to continue or stop
+                    if len(failed_builds) >= 2:
+                        self.logger.error("❌ Multiple failures detected, stopping build process")
+                        break
+                
+                # Wait between builds to let Docker settle
+                if i < len(images_to_build):
+                    self.logger.info("⏸️ Waiting 30 seconds between builds...")
+                    import time
+                    time.sleep(30)
             
-            # Inference images
-            os.environ['REPOSITORY_NAME'] = 'beta-autogluon-inference'
+            # Final cleanup
+            self.docker_cleanup_between_builds()
             
-            self.logger.info("Building inference CPU image...")
-            self.run_subprocess_with_logging([
-                "dlc/bin/python", "src/main.py",
-                "--buildspec", "autogluon/inference/buildspec.yml",
-                "--framework", "autogluon",
-                "--image_types", "inference",
-                "--device_types", "cpu",
-                "--py_versions", "py3"
-            ], step_description="Building AutoGluon Inference CPU Image", capture_output=False)
-            self.logger.info("✅ Inference CPU image built")
+            # Build summary
+            self.logger.info("📊 Docker Build Summary:")
+            self.logger.info(f"✅ Successful builds ({len(successful_builds)}): {successful_builds}")
+            if failed_builds:
+                self.logger.error(f"❌ Failed builds ({len(failed_builds)}): {failed_builds}")
             
-            self.logger.info("Building inference GPU image...")
-            self.run_subprocess_with_logging([
-                "dlc/bin/python", "src/main.py",
-                "--buildspec", "autogluon/inference/buildspec.yml",
-                "--framework", "autogluon",
-                "--image_types", "inference",
-                "--device_types", "gpu",
-                "--py_versions", "py3"
-            ], step_description="Building AutoGluon Inference GPU Image", capture_output=False)
-            self.logger.info("✅ Inference GPU image built")
+            # Final space check
+            self.check_disk_space("after all builds")
             
-            self.logger.info("🎉 All Docker images built and uploaded successfully!")
-            return True
+            if len(failed_builds) == 0:
+                self.logger.info("🎉 All Docker images built and uploaded successfully!")
+                return True
+            else:
+                self.logger.error(f"❌ {len(failed_builds)} image(s) failed to build")
+                return False
             
         except Exception as e:
             self.logger.error(f"❌ Failed to build Docker images: {e}")
+            self.docker_cleanup_between_builds()  # Cleanup on error
             return False
 
     def run_steps(self, steps_only=None):
