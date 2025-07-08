@@ -1,0 +1,336 @@
+# .github/workflows/infrastructure-release.yml
+name: Infrastructure & Release Management
+
+on:
+  workflow_dispatch:
+    inputs:
+      current_version:
+        description: 'Current version (e.g., 1.4.0)'
+        required: true
+        type: string
+      previous_version:
+        description: 'Previous version (e.g., 1.3.0)'
+        required: true
+        type: string
+      fork_url:
+        description: 'Your fork URL'
+        required: true
+        type: string
+      operation:
+        description: 'Operation to perform'
+        required: true
+        type: choice
+        options:
+          - 'infrastructure-deploy'
+          - 'release-images'
+          - 'asimov-scan'
+          - 'post-pr-complete'
+          - 'full-release-pipeline'
+        default: 'infrastructure-deploy'
+      skip_confirmations:
+        description: 'Skip manual confirmations (for automation)'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  PYTHONPATH: ${{ github.workspace }}/src
+  REGION: us-east-1
+
+jobs:
+  infrastructure-setup:
+    runs-on: ubuntu-latest
+    outputs:
+      operation: ${{ steps.setup.outputs.operation }}
+      should-deploy-infra: ${{ steps.setup.outputs.deploy-infra }}
+      should-update-images: ${{ steps.setup.outputs.update-images }}
+      should-run-asimov: ${{ steps.setup.outputs.run-asimov }}
+    steps:
+      - name: Setup operation parameters
+        id: setup
+        run: |
+          echo "operation=${{ inputs.operation }}" >> $GITHUB_OUTPUT
+          
+          case "${{ inputs.operation }}" in
+            "infrastructure-deploy")
+              echo "deploy-infra=true" >> $GITHUB_OUTPUT
+              echo "update-images=false" >> $GITHUB_OUTPUT
+              echo "run-asimov=false" >> $GITHUB_OUTPUT
+              ;;
+            "release-images")
+              echo "deploy-infra=false" >> $GITHUB_OUTPUT
+              echo "update-images=true" >> $GITHUB_OUTPUT
+              echo "run-asimov=false" >> $GITHUB_OUTPUT
+              ;;
+            "asimov-scan")
+              echo "deploy-infra=false" >> $GITHUB_OUTPUT
+              echo "update-images=false" >> $GITHUB_OUTPUT
+              echo "run-asimov=true" >> $GITHUB_OUTPUT
+              ;;
+            "post-pr-complete")
+              echo "deploy-infra=true" >> $GITHUB_OUTPUT
+              echo "update-images=true" >> $GITHUB_OUTPUT
+              echo "run-asimov=true" >> $GITHUB_OUTPUT
+              ;;
+            "full-release-pipeline")
+              echo "deploy-infra=true" >> $GITHUB_OUTPUT
+              echo "update-images=true" >> $GITHUB_OUTPUT
+              echo "run-asimov=true" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+  infrastructure-deployment:
+    runs-on: ubuntu-latest
+    needs: infrastructure-setup
+    if: needs.infrastructure-setup.outputs.should-deploy-infra == 'true'
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_agent.txt
+          
+          # Install Brazil CLI (mock for demo - replace with actual installation)
+          echo "Installing Brazil CLI..."
+          # sudo apt-get install brazil-cli  # Replace with actual Brazil CLI installation
+
+      - name: Configure environment
+        run: |
+          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
+          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
+
+      - name: Run infrastructure deployment
+        id: infra-deploy
+        run: |
+          echo "🏗️ Starting infrastructure deployment..."
+          
+          # If skip_confirmations is true, we'll need to modify the script to auto-confirm
+          if [ "${{ inputs.skip_confirmations }}" == "true" ]; then
+            export AUTO_CONFIRM="true"
+          fi
+          
+          python step_8_infrastructure.py \
+            --current-version="${{ inputs.current_version }}" \
+            --previous-version="${{ inputs.previous_version }}" \
+            --fork-url="${{ inputs.fork_url }}"
+        continue-on-error: true
+
+      - name: Upload infrastructure deployment logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: infrastructure-deployment-${{ inputs.current_version }}
+          path: |
+            automation_logs/dlc_cr*.log
+            infrastructure_outputs/
+          retention-days: 14
+
+  release-images-update:
+    runs-on: ubuntu-latest
+    needs: [infrastructure-setup, infrastructure-deployment]
+    if: always() && needs.infrastructure-setup.outputs.should-update-images == 'true'
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_agent.txt
+
+      - name: Configure environment
+        run: |
+          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
+          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
+          echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
+
+      - name: Run release images automation
+        id: release-images
+        run: |
+          echo "📦 Starting release images automation..."
+          
+          python autogluon_release_automation.py \
+            --current-version="${{ inputs.current_version }}" \
+            --previous-version="${{ inputs.previous_version }}" \
+            --fork-url="${{ inputs.fork_url }}"
+        continue-on-error: true
+
+      - name: Upload release images logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-images-${{ inputs.current_version }}
+          path: |
+            automation_logs/autogluon_release*.log
+            release_images_outputs/
+          retention-days: 14
+
+  asimov-security-scan:
+    runs-on: ubuntu-latest
+    needs: [infrastructure-setup, infrastructure-deployment, release-images-update]
+    if: always() && needs.infrastructure-setup.outputs.should-run-asimov == 'true'
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_agent.txt
+          
+          # Install Brazil CLI (mock for demo)
+          echo "Installing Brazil CLI for Asimov scan..."
+
+      - name: Configure environment
+        run: |
+          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
+          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
+
+      - name: Run Asimov security scan
+        id: asimov-scan
+        run: |
+          echo "🔒 Starting Asimov security scan automation..."
+          
+          python asimov_scan_cr.py \
+            --current-version="${{ inputs.current_version }}" \
+            --previous-version="${{ inputs.previous_version }}" \
+            --fork-url="${{ inputs.fork_url }}"
+        continue-on-error: true
+
+      - name: Upload Asimov scan logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: asimov-scan-${{ inputs.current_version }}
+          path: |
+            automation_logs/asimov_scan*.log
+            asimov_outputs/
+          retention-days: 14
+
+  release-summary:
+    runs-on: ubuntu-latest
+    needs: [infrastructure-setup, infrastructure-deployment, release-images-update, asimov-security-scan]
+    if: always()
+    steps:
+      - name: Generate release summary
+        run: |
+          echo "## 🚀 Infrastructure & Release Management Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ inputs.previous_version }} → ${{ inputs.current_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Operation:** ${{ inputs.operation }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Fork URL:** ${{ inputs.fork_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 📊 Component Status" >> $GITHUB_STEP_SUMMARY
+          
+          # Infrastructure deployment status
+          if [ "${{ needs.infrastructure-deployment.result }}" == "success" ]; then
+            echo "✅ **Infrastructure Deployment:** Completed successfully" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.infrastructure-deployment.result }}" == "failure" ]; then
+            echo "❌ **Infrastructure Deployment:** Failed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.infrastructure-deployment.result }}" == "skipped" ]; then
+            echo "⏭️ **Infrastructure Deployment:** Skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Release images status
+          if [ "${{ needs.release-images-update.result }}" == "success" ]; then
+            echo "✅ **Release Images Update:** Completed successfully" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.release-images-update.result }}" == "failure" ]; then
+            echo "❌ **Release Images Update:** Failed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.release-images-update.result }}" == "skipped" ]; then
+            echo "⏭️ **Release Images Update:** Skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Asimov scan status
+          if [ "${{ needs.asimov-security-scan.result }}" == "success" ]; then
+            echo "✅ **Asimov Security Scan:** Completed successfully" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.asimov-security-scan.result }}" == "failure" ]; then
+            echo "❌ **Asimov Security Scan:** Failed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.asimov-security-scan.result }}" == "skipped" ]; then
+            echo "⏭️ **Asimov Security Scan:** Skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📝 Next Steps" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine overall success
+          if [[ "${{ needs.infrastructure-deployment.result }}" == "success" || "${{ needs.infrastructure-deployment.result }}" == "skipped" ]] && \
+             [[ "${{ needs.release-images-update.result }}" == "success" || "${{ needs.release-images-update.result }}" == "skipped" ]] && \
+             [[ "${{ needs.asimov-security-scan.result }}" == "success" || "${{ needs.asimov-security-scan.result }}" == "skipped" ]]; then
+            echo "🎉 **Release pipeline completed successfully!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The AutoGluon ${{ inputs.current_version }} release infrastructure has been deployed." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ **Some components failed or need attention.**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Please review the failed components and re-run as needed." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Check overall success
+        run: |
+          # Count successful/skipped vs failed jobs
+          success_count=0
+          fail_count=0
+          
+          for result in "${{ needs.infrastructure-deployment.result }}" "${{ needs.release-images-update.result }}" "${{ needs.asimov-security-scan.result }}"; do
+            if [[ "$result" == "success" || "$result" == "skipped" ]]; then
+              ((success_count++))
+            elif [[ "$result" == "failure" ]]; then
+              ((fail_count++))
+            fi
+          done
+          
+          echo "Successful/Skipped jobs: $success_count"
+          echo "Failed jobs: $fail_count"
+          
+          # Fail the workflow if any required jobs failed
+          if [ $fail_count -gt 0 ]; then
+            echo "❌ Release pipeline had failures"
+            exit 1
+          else
+            echo "✅ Release pipeline completed successfully"
+          fi

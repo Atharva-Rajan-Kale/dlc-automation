@@ -1,0 +1,423 @@
+# .github/workflows/autogluon-testing.yml
+name: AutoGluon Testing Suite
+
+on:
+  workflow_dispatch:
+    inputs:
+      current_version:
+        description: 'Current version (e.g., 1.4.0)'
+        required: true
+        type: string
+      previous_version:
+        description: 'Previous version (e.g., 1.3.0)'
+        required: true
+        type: string
+      fork_url:
+        description: 'Your fork URL'
+        required: true
+        type: string
+      test_suite:
+        description: 'Test suite to run'
+        required: true
+        type: choice
+        options:
+          - 'all'
+          - 'pip-check'
+          - 'autogluon-tests'
+          - 'sagemaker-tests'
+          - 'security-tests'
+          - 'quick-checks'
+        default: 'all'
+      pr_number:
+        description: 'PR number (for security tests)'
+        required: false
+        type: string
+
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - '**.py'
+      - 'requirements*.txt'
+      - '.github/workflows/**'
+
+env:
+  PYTHONPATH: ${{ github.workspace }}/src
+  REGION: us-east-1
+
+jobs:
+  setup-testing:
+    runs-on: ubuntu-latest
+    outputs:
+      test-matrix: ${{ steps.matrix.outputs.test-matrix }}
+      should-run-pip: ${{ steps.determine.outputs.pip }}
+      should-run-autogluon: ${{ steps.determine.outputs.autogluon }}
+      should-run-sagemaker: ${{ steps.determine.outputs.sagemaker }}
+      should-run-security: ${{ steps.determine.outputs.security }}
+      should-run-quick: ${{ steps.determine.outputs.quick }}
+    steps:
+      - name: Determine tests to run
+        id: determine
+        run: |
+          case "${{ inputs.test_suite }}" in
+            "all")
+              echo "pip=true" >> $GITHUB_OUTPUT
+              echo "autogluon=true" >> $GITHUB_OUTPUT
+              echo "sagemaker=true" >> $GITHUB_OUTPUT
+              echo "security=true" >> $GITHUB_OUTPUT
+              echo "quick=true" >> $GITHUB_OUTPUT
+              ;;
+            "pip-check")
+              echo "pip=true" >> $GITHUB_OUTPUT
+              echo "autogluon=false" >> $GITHUB_OUTPUT
+              echo "sagemaker=false" >> $GITHUB_OUTPUT
+              echo "security=false" >> $GITHUB_OUTPUT
+              echo "quick=false" >> $GITHUB_OUTPUT
+              ;;
+            "autogluon-tests")
+              echo "pip=false" >> $GITHUB_OUTPUT
+              echo "autogluon=true" >> $GITHUB_OUTPUT
+              echo "sagemaker=false" >> $GITHUB_OUTPUT
+              echo "security=false" >> $GITHUB_OUTPUT
+              echo "quick=false" >> $GITHUB_OUTPUT
+              ;;
+            "sagemaker-tests")
+              echo "pip=false" >> $GITHUB_OUTPUT
+              echo "autogluon=false" >> $GITHUB_OUTPUT
+              echo "sagemaker=true" >> $GITHUB_OUTPUT
+              echo "security=false" >> $GITHUB_OUTPUT
+              echo "quick=false" >> $GITHUB_OUTPUT
+              ;;
+            "security-tests")
+              echo "pip=false" >> $GITHUB_OUTPUT
+              echo "autogluon=false" >> $GITHUB_OUTPUT
+              echo "sagemaker=false" >> $GITHUB_OUTPUT
+              echo "security=true" >> $GITHUB_OUTPUT
+              echo "quick=false" >> $GITHUB_OUTPUT
+              ;;
+            "quick-checks")
+              echo "pip=false" >> $GITHUB_OUTPUT
+              echo "autogluon=false" >> $GITHUB_OUTPUT
+              echo "sagemaker=false" >> $GITHUB_OUTPUT
+              echo "security=false" >> $GITHUB_OUTPUT
+              echo "quick=true" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Setup test matrix
+        id: matrix
+        run: |
+          echo 'test-matrix=["pip-check", "autogluon-tests", "sagemaker-tests"]' >> $GITHUB_OUTPUT
+
+  pip-check-agent:
+    runs-on: ubuntu-latest
+    needs: setup-testing
+    if: needs.setup-testing.outputs.should-run-pip == 'true'
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_agent.txt
+
+      - name: Configure environment
+        run: |
+          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
+          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
+          echo "BEDROCK_INFERENCE_PROFILE_ARN=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}" >> $GITHUB_ENV
+
+      - name: ECR Login
+        run: |
+          aws ecr get-login-password --region ${{ env.REGION }} | docker login --username AWS --password-stdin ${{ secrets.ACCOUNT_ID }}.dkr.ecr.${{ env.REGION }}.amazonaws.com
+
+      - name: Run Pip Check Agent
+        run: |
+          python pip_check_agent.py \
+            --current-version="${{ inputs.current_version }}" \
+            --previous-version="${{ inputs.previous_version }}" \
+            --fork-url="${{ inputs.fork_url }}"
+
+      - name: Upload pip check results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pip-check-results-${{ inputs.current_version }}
+          path: |
+            automation_logs/pip_check*.log
+            pip_check_results/
+          retention-days: 7
+
+  autogluon-tests:
+    runs-on: ubuntu-latest
+    needs: setup-testing
+    if: needs.setup-testing.outputs.should-run-autogluon == 'true'
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_agent.txt
+
+      - name: Configure environment
+        run: |
+          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
+          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
+
+      - name: ECR Login
+        run: |
+          aws ecr get-login-password --region ${{ env.REGION }} | docker login --username AWS --password-stdin ${{ secrets.ACCOUNT_ID }}.dkr.ecr.${{ env.REGION }}.amazonaws.com
+
+      - name: Run AutoGluon Tests
+        run: |
+          python autogluon_test_agent.py \
+            --current-version="${{ inputs.current_version }}" \
+            --previous-version="${{ inputs.previous_version }}" \
+            --fork-url="${{ inputs.fork_url }}"
+
+      - name: Upload AutoGluon test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: autogluon-test-results-${{ inputs.current_version }}
+          path: |
+            automation_logs/autogluon*.log
+            autogluon_test_results/
+          retention-days: 7
+
+  sagemaker-tests:
+    runs-on: ubuntu-latest
+    needs: setup-testing
+    if: needs.setup-testing.outputs.should-run-sagemaker == 'true'
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_agent.txt
+
+      - name: Configure environment
+        run: |
+          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
+          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
+          echo "BEDROCK_INFERENCE_PROFILE_ARN=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}" >> $GITHUB_ENV
+
+      - name: ECR Login
+        run: |
+          aws ecr get-login-password --region ${{ env.REGION }} | docker login --username AWS --password-stdin ${{ secrets.ACCOUNT_ID }}.dkr.ecr.${{ env.REGION }}.amazonaws.com
+
+      - name: Run SageMaker Tests
+        run: |
+          python sagemaker_test_agent.py \
+            --current-version="${{ inputs.current_version }}" \
+            --previous-version="${{ inputs.previous_version }}" \
+            --fork-url="${{ inputs.fork_url }}"
+
+      - name: Upload SageMaker test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sagemaker-test-results-${{ inputs.current_version }}
+          path: |
+            automation_logs/sagemaker*.log
+            sagemaker_test_results/
+          retention-days: 7
+
+  security-tests:
+    runs-on: ubuntu-latest
+    needs: setup-testing
+    if: needs.setup-testing.outputs.should-run-security == 'true'
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_agent.txt
+
+      - name: Configure environment
+        run: |
+          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
+          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
+          echo "CODEBUILD_AWS_ACCESS_KEY_ID=${{ secrets.CODEBUILD_ACCESS_KEY_ID }}" >> $GITHUB_ENV
+          echo "CODEBUILD_AWS_SECRET_ACCESS_KEY=${{ secrets.CODEBUILD_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
+          echo "CODEBUILD_AWS_SESSION_TOKEN=${{ secrets.CODEBUILD_AWS_SESSION_TOKEN }}" >> $GITHUB_ENV
+          echo "BEDROCK_INFERENCE_PROFILE_ARN=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}" >> $GITHUB_ENV
+          echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
+
+      - name: Run Security Tests
+        run: |
+          python security_test_agent.py \
+            --current-version="${{ inputs.current_version }}" \
+            --previous-version="${{ inputs.previous_version }}" \
+            --fork-url="${{ inputs.fork_url }}"
+
+      - name: Upload security test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-test-results-${{ inputs.current_version }}
+          path: |
+            automation_logs/security*.log
+            security_test_results/
+          retention-days: 14
+
+  quick-checks:
+    runs-on: ubuntu-latest
+    needs: setup-testing
+    if: needs.setup-testing.outputs.should-run-quick == 'true'
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_agent.txt
+
+      - name: Configure environment
+        run: |
+          echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
+
+      - name: Run Quick Checks
+        run: |
+          python quick_checks_agent.py \
+            --current-version="${{ inputs.current_version }}" \
+            --previous-version="${{ inputs.previous_version }}" \
+            --fork-url="${{ inputs.fork_url }}"
+
+      - name: Upload quick check results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quick-check-results-${{ inputs.current_version }}
+          path: |
+            automation_logs/quick_check*.log
+          retention-days: 7
+
+  test-summary:
+    runs-on: ubuntu-latest
+    needs: [setup-testing, pip-check-agent, autogluon-tests, sagemaker-tests, security-tests, quick-checks]
+    if: always()
+    steps:
+      - name: Generate test summary
+        run: |
+          echo "## 🧪 AutoGluon Testing Suite Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ inputs.current_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Test Suite:** ${{ inputs.test_suite }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check each job result
+          if [ "${{ needs.pip-check-agent.result }}" == "success" ]; then
+            echo "✅ **Pip Check Agent:** Passed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.pip-check-agent.result }}" == "failure" ]; then
+            echo "❌ **Pip Check Agent:** Failed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.pip-check-agent.result }}" == "skipped" ]; then
+            echo "⏭️ **Pip Check Agent:** Skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ needs.autogluon-tests.result }}" == "success" ]; then
+            echo "✅ **AutoGluon Tests:** Passed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.autogluon-tests.result }}" == "failure" ]; then
+            echo "❌ **AutoGluon Tests:** Failed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.autogluon-tests.result }}" == "skipped" ]; then
+            echo "⏭️ **AutoGluon Tests:** Skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ needs.sagemaker-tests.result }}" == "success" ]; then
+            echo "✅ **SageMaker Tests:** Passed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.sagemaker-tests.result }}" == "failure" ]; then
+            echo "❌ **SageMaker Tests:** Failed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.sagemaker-tests.result }}" == "skipped" ]; then
+            echo "⏭️ **SageMaker Tests:** Skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ needs.security-tests.result }}" == "success" ]; then
+            echo "✅ **Security Tests:** Passed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.security-tests.result }}" == "failure" ]; then
+            echo "❌ **Security Tests:** Failed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.security-tests.result }}" == "skipped" ]; then
+            echo "⏭️ **Security Tests:** Skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ needs.quick-checks.result }}" == "success" ]; then
+            echo "✅ **Quick Checks:** Passed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.quick-checks.result }}" == "failure" ]; then
+            echo "❌ **Quick Checks:** Failed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.quick-checks.result }}" == "skipped" ]; then
+            echo "⏭️ **Quick Checks:** Skipped" >> $GITHUB_STEP_SUMMARY
+          fi
