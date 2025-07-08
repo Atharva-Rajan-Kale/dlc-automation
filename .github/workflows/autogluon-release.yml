@@ -87,14 +87,6 @@ jobs:
     needs: [setup, validate-inputs]
     timeout-minutes: 180
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ needs.setup.outputs.python-version }}
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -103,102 +95,47 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.REGION }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Install system dependencies
+      - name: Submit AWS Batch Job
+        id: batch-job
         run: |
-          sudo apt-get update
-          sudo apt-get install -y git curl wget jq
+          echo "🚀 Submitting AutoGluon Release Automation to AWS Batch"
           
-          # Install GitHub CLI
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-          sudo apt-get update
-          sudo apt-get install -y gh
-
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements_agent.txt
-          echo "✅ Python dependencies installed"
-
-      - name: Configure environment variables
-        run: |
-          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
-          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
-          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> $GITHUB_ENV
-          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
-          echo "AWS_SESSION_TOKEN=${{ secrets.AWS_SESSION_TOKEN }}" >> $GITHUB_ENV
-          
-          # CodeBuild credentials
-          echo "CODEBUILD_AWS_ACCESS_KEY_ID=${{ secrets.CODEBUILD_ACCESS_KEY_ID }}" >> $GITHUB_ENV
-          echo "CODEBUILD_AWS_SECRET_ACCESS_KEY=${{ secrets.CODEBUILD_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
-          echo "CODEBUILD_AWS_SESSION_TOKEN=${{ secrets.CODEBUILD_AWS_SESSION_TOKEN }}" >> $GITHUB_ENV
-          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
-          
-          # Bedrock credentials
-          echo "BEDROCK_INFERENCE_PROFILE_ARN=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}" >> $GITHUB_ENV
-          echo "BEDROCK_AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> $GITHUB_ENV
-          echo "BEDROCK_AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
-          echo "BEDROCK_AWS_SESSION_TOKEN=${{ secrets.AWS_SESSION_TOKEN }}" >> $GITHUB_ENV
-          echo "BEDROCK_REGION=${{ env.REGION }}" >> $GITHUB_ENV
-          
-          # GitHub token
-          echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
-
-      - name: ECR Login
-        run: |
-          echo "🔐 Logging into ECR..."
-          aws ecr get-login-password --region ${{ env.REGION }} | docker login --username AWS --password-stdin ${{ secrets.ACCOUNT_ID }}.dkr.ecr.${{ env.REGION }}.amazonaws.com
-          aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 763104351884.dkr.ecr.us-west-2.amazonaws.com
-          echo "✅ ECR login successful"
-
-      - name: Run AutoGluon Release Automation
-        id: automation
-        run: |
-          echo "🚀 Starting automation with workflow type: ${{ inputs.workflow_type }}"
-          
-          # Base command
-          cmd="python enhanced_main_automation.py"
-          cmd="$cmd --current-version=${{ inputs.current_version }}"
-          cmd="$cmd --previous-version=${{ inputs.previous_version }}"
-          cmd="$cmd --fork-url=${{ inputs.fork_url }}"
-          
-          # Add workflow-specific flags
+          # Determine job parameters based on workflow type
           case "${{ inputs.workflow_type }}" in
-            "complete")
-              cmd="$cmd --complete"
-              ;;
-            "steps-125")
-              cmd="$cmd --steps-125"
-              ;;
-            "steps-34")
-              cmd="$cmd --steps-34"
-              ;;
-            "step-6")
-              cmd="$cmd --step-6-only"
-              ;;
-            "create-pr")
-              cmd="$cmd --pr-only"
-              ;;
-            "infrastructure")
-              cmd="$cmd --infrastructure"
-              ;;
-            "release-images")
-              cmd="$cmd --release-images"
-              ;;
-            "asimov-scan")
-              cmd="$cmd --asimov-scan"
-              ;;
-            "post-pr-workflow")
-              cmd="$cmd --post-pr-workflow"
-              ;;
+            "complete") JOB_PARAMS="--complete" ;;
+            "steps-125") JOB_PARAMS="--steps-125" ;;
+            "steps-34") JOB_PARAMS="--steps-34" ;;
+            "step-6") JOB_PARAMS="--step-6-only" ;;
+            "create-pr") JOB_PARAMS="--pr-only" ;;
+            "infrastructure") JOB_PARAMS="--infrastructure" ;;
+            "release-images") JOB_PARAMS="--release-images" ;;
+            "asimov-scan") JOB_PARAMS="--asimov-scan" ;;
+            "post-pr-workflow") JOB_PARAMS="--post-pr-workflow" ;;
           esac
           
-          echo "🎯 Executing: $cmd"
-          eval $cmd
-        continue-on-error: true
+          JOB_ID=$(aws batch submit-job \
+            --job-name "autogluon-release-${{ inputs.workflow_type }}-${{ github.run_number }}" \
+            --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
+            --job-definition "${{ secrets.BATCH_JOB_DEFINITION }}" \
+            --parameters currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}",jobParams="$JOB_PARAMS" \
+            --query 'jobId' --output text)
+          
+          echo "job-id=$JOB_ID" >> $GITHUB_OUTPUT
+          echo "✅ Batch job submitted: $JOB_ID"
+
+      - name: Wait for Batch Job Completion
+        run: |
+          echo "⏳ Waiting for batch job completion: ${{ steps.batch-job.outputs.job-id }}"
+          
+          aws batch wait job-execution-complete --jobs ${{ steps.batch-job.outputs.job-id }}
+          
+          JOB_STATUS=$(aws batch describe-jobs --jobs ${{ steps.batch-job.outputs.job-id }} --query 'jobs[0].status' --output text)
+          echo "Job completed with status: $JOB_STATUS"
+          
+          if [ "$JOB_STATUS" != "SUCCEEDED" ]; then
+            echo "❌ Batch job failed"
+            exit 1
+          fi
 
       - name: Upload automation logs
         uses: actions/upload-artifact@v4

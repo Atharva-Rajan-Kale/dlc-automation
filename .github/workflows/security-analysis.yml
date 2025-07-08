@@ -71,14 +71,6 @@ jobs:
     if: needs.security-setup.outputs.should-run == 'true'
     timeout-minutes: 240
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -87,123 +79,55 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.REGION }}
 
-      - name: Install dependencies
+      - name: Submit Security Analysis Batch Job
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements_agent.txt
-          
-          # Install GitHub CLI for PR interaction
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-          sudo apt-get update
-          sudo apt-get install -y gh
-
-      - name: Configure environment
-        run: |
-          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
-          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
-          
-          # CodeBuild credentials for log access
-          echo "CODEBUILD_AWS_ACCESS_KEY_ID=${{ secrets.CODEBUILD_ACCESS_KEY_ID }}" >> $GITHUB_ENV
-          echo "CODEBUILD_AWS_SECRET_ACCESS_KEY=${{ secrets.CODEBUILD_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
-          echo "CODEBUILD_AWS_SESSION_TOKEN=${{ secrets.CODEBUILD_AWS_SESSION_TOKEN }}" >> $GITHUB_ENV
-          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
-          
-          # Bedrock credentials for AI analysis
-          echo "BEDROCK_INFERENCE_PROFILE_ARN=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}" >> $GITHUB_ENV
-          echo "BEDROCK_AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> $GITHUB_ENV
-          echo "BEDROCK_AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
-          echo "BEDROCK_AWS_SESSION_TOKEN=${{ secrets.AWS_SESSION_TOKEN }}" >> $GITHUB_ENV
-          echo "BEDROCK_REGION=${{ env.REGION }}" >> $GITHUB_ENV
-          
-          # GitHub token for PR access
-          echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
-
-      - name: Run security analysis
-        id: security
-        run: |
-          echo "🔒 Starting security analysis..."
-          
           # Determine version inputs based on trigger
           if [ "${{ github.event_name }}" == "schedule" ]; then
-            # For scheduled runs, use latest version or default
-            current_version="1.4.0"  # Update this as needed
+            current_version="1.4.0"
             previous_version="1.3.0"
-            fork_url="https://github.com/your-username/deep-learning-containers"  # Update this
+            fork_url="https://github.com/your-username/deep-learning-containers"
           else
             current_version="${{ inputs.current_version }}"
             previous_version="${{ inputs.previous_version }}"
             fork_url="${{ inputs.fork_url }}"
           fi
           
-          # Build command based on analysis type
-          case "${{ needs.security-setup.outputs.analysis-type }}" in
-            "full-analysis")
-              python security_test_agent.py \
-                --current-version="$current_version" \
-                --previous-version="$previous_version" \
-                --fork-url="$fork_url"
-              ;;
-            "deterministic-only")
-              python security_test_agent.py \
-                --current-version="$current_version" \
-                --previous-version="$previous_version" \
-                --fork-url="$fork_url" \
-                --deterministic-only
-              ;;
-            "monitor-only")
-              echo "🔍 Running security monitoring..."
-              python -c "
-              from security_test_agent import SecurityTestAgent
-              agent = SecurityTestAgent('$current_version', '$previous_version', '$fork_url')
-              pr_number = agent.get_current_pr_number()
-              if pr_number:
-                  print(f'Monitoring PR #{pr_number}')
-                  status = agent.monitor_pr_status(pr_number)
-                  print(f'Security test status: {status}')
-              else:
-                  print('No open PR found for monitoring')
-              "
-              ;;
-            "fix-vulnerabilities")
-              python security_test_agent.py \
-                --current-version="$current_version" \
-                --previous-version="$previous_version" \
-                --fork-url="$fork_url" \
-                --auto-fix
-              ;;
-          esac
-        continue-on-error: true
+          JOB_ID=$(aws batch submit-job \
+            --job-name "security-analysis-${{ needs.security-setup.outputs.analysis-type }}-${{ github.run_number }}" \
+            --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
+            --job-definition "${{ secrets.BATCH_SECURITY_JOB_DEFINITION }}" \
+            --parameters analysisType="${{ needs.security-setup.outputs.analysis-type }}",currentVersion="$current_version",previousVersion="$previous_version",forkUrl="$fork_url",prNumber="${{ inputs.pr_number }}" \
+            --query 'jobId' --output text)
+          
+          aws batch wait job-execution-complete --jobs $JOB_ID
+          echo "✅ Security analysis completed: $JOB_ID"
 
-      - name: Parse security results
+      - name: Get Batch Job Results
         id: results
         if: always()
         run: |
-          echo "📊 Parsing security analysis results..."
+          echo "📊 Getting security analysis results from S3..."
           
-          # Check if security log exists
-          if [ -f "automation_logs/security_test.log" ]; then
-            # Extract key metrics from log
-            vulnerabilities_found=$(grep -c "vulnerability found" automation_logs/security_test.log || echo "0")
-            vulnerabilities_fixed=$(grep -c "vulnerability fixed" automation_logs/security_test.log || echo "0")
-            tests_analyzed=$(grep -c "security test analyzed" automation_logs/security_test.log || echo "0")
+          # Download results from S3 (assuming batch job uploads results there)
+          aws s3 cp s3://${{ secrets.BATCH_RESULTS_BUCKET }}/security-analysis-${{ github.run_number }}/ ./results/ --recursive || true
+          
+          # Set default values
+          echo "vulnerabilities-found=0" >> $GITHUB_OUTPUT
+          echo "vulnerabilities-fixed=0" >> $GITHUB_OUTPUT
+          echo "tests-analyzed=0" >> $GITHUB_OUTPUT
+          echo "has-critical=false" >> $GITHUB_OUTPUT
+          
+          # Parse results if available
+          if [ -f "results/security_summary.json" ]; then
+            vulnerabilities_found=$(jq -r '.vulnerabilities_found // 0' results/security_summary.json)
+            vulnerabilities_fixed=$(jq -r '.vulnerabilities_fixed // 0' results/security_summary.json)
+            tests_analyzed=$(jq -r '.tests_analyzed // 0' results/security_summary.json)
+            has_critical=$(jq -r '.has_critical // false' results/security_summary.json)
             
             echo "vulnerabilities-found=$vulnerabilities_found" >> $GITHUB_OUTPUT
             echo "vulnerabilities-fixed=$vulnerabilities_fixed" >> $GITHUB_OUTPUT
             echo "tests-analyzed=$tests_analyzed" >> $GITHUB_OUTPUT
-            
-            # Check for critical issues
-            if grep -q "CRITICAL" automation_logs/security_test.log; then
-              echo "has-critical=true" >> $GITHUB_OUTPUT
-            else
-              echo "has-critical=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "No security log found"
-            echo "vulnerabilities-found=0" >> $GITHUB_OUTPUT
-            echo "vulnerabilities-fixed=0" >> $GITHUB_OUTPUT
-            echo "tests-analyzed=0" >> $GITHUB_OUTPUT
-            echo "has-critical=false" >> $GITHUB_OUTPUT
+            echo "has-critical=$has_critical" >> $GITHUB_OUTPUT
           fi
 
       - name: Upload security analysis artifacts

@@ -115,14 +115,6 @@ jobs:
     if: needs.setup-testing.outputs.should-run-pip == 'true'
     timeout-minutes: 60
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -131,31 +123,17 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.REGION }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Install dependencies
+      - name: Submit Pip Check Batch Job
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements_agent.txt
-
-      - name: Configure environment
-        run: |
-          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
-          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
-          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
-          echo "BEDROCK_INFERENCE_PROFILE_ARN=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}" >> $GITHUB_ENV
-
-      - name: ECR Login
-        run: |
-          aws ecr get-login-password --region ${{ env.REGION }} | docker login --username AWS --password-stdin ${{ secrets.ACCOUNT_ID }}.dkr.ecr.${{ env.REGION }}.amazonaws.com
-
-      - name: Run Pip Check Agent
-        run: |
-          python pip_check_agent.py \
-            --current-version="${{ inputs.current_version }}" \
-            --previous-version="${{ inputs.previous_version }}" \
-            --fork-url="${{ inputs.fork_url }}"
+          JOB_ID=$(aws batch submit-job \
+            --job-name "pip-check-${{ github.run_number }}" \
+            --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
+            --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
+            --parameters testType="pip-check",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
+            --query 'jobId' --output text)
+          
+          aws batch wait job-execution-complete --jobs $JOB_ID
+          echo "✅ Pip check completed: $JOB_ID"
 
       - name: Upload pip check results
         uses: actions/upload-artifact@v4
@@ -173,14 +151,6 @@ jobs:
     if: needs.setup-testing.outputs.should-run-autogluon == 'true'
     timeout-minutes: 90
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -189,30 +159,17 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.REGION }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Install dependencies
+      - name: Submit AutoGluon Tests Batch Job
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements_agent.txt
-
-      - name: Configure environment
-        run: |
-          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
-          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
-          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
-
-      - name: ECR Login
-        run: |
-          aws ecr get-login-password --region ${{ env.REGION }} | docker login --username AWS --password-stdin ${{ secrets.ACCOUNT_ID }}.dkr.ecr.${{ env.REGION }}.amazonaws.com
-
-      - name: Run AutoGluon Tests
-        run: |
-          python autogluon_test_agent.py \
-            --current-version="${{ inputs.current_version }}" \
-            --previous-version="${{ inputs.previous_version }}" \
-            --fork-url="${{ inputs.fork_url }}"
+          JOB_ID=$(aws batch submit-job \
+            --job-name "autogluon-tests-${{ github.run_number }}" \
+            --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
+            --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
+            --parameters testType="autogluon-tests",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
+            --query 'jobId' --output text)
+          
+          aws batch wait job-execution-complete --jobs $JOB_ID
+          echo "✅ AutoGluon tests completed: $JOB_ID"
 
       - name: Upload AutoGluon test results
         uses: actions/upload-artifact@v4
@@ -230,14 +187,6 @@ jobs:
     if: needs.setup-testing.outputs.should-run-sagemaker == 'true'
     timeout-minutes: 120
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -246,28 +195,17 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.REGION }}
 
-      - name: Install dependencies
+      - name: Submit SageMaker Tests Batch Job
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements_agent.txt
-
-      - name: Configure environment
-        run: |
-          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
-          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
-          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
-          echo "BEDROCK_INFERENCE_PROFILE_ARN=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}" >> $GITHUB_ENV
-
-      - name: ECR Login
-        run: |
-          aws ecr get-login-password --region ${{ env.REGION }} | docker login --username AWS --password-stdin ${{ secrets.ACCOUNT_ID }}.dkr.ecr.${{ env.REGION }}.amazonaws.com
-
-      - name: Run SageMaker Tests
-        run: |
-          python sagemaker_test_agent.py \
-            --current-version="${{ inputs.current_version }}" \
-            --previous-version="${{ inputs.previous_version }}" \
-            --fork-url="${{ inputs.fork_url }}"
+          JOB_ID=$(aws batch submit-job \
+            --job-name "sagemaker-tests-${{ github.run_number }}" \
+            --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
+            --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
+            --parameters testType="sagemaker-tests",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
+            --query 'jobId' --output text)
+          
+          aws batch wait job-execution-complete --jobs $JOB_ID
+          echo "✅ SageMaker tests completed: $JOB_ID"
 
       - name: Upload SageMaker test results
         uses: actions/upload-artifact@v4
@@ -285,14 +223,6 @@ jobs:
     if: needs.setup-testing.outputs.should-run-security == 'true'
     timeout-minutes: 90
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -301,28 +231,17 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.REGION }}
 
-      - name: Install dependencies
+      - name: Submit Security Tests Batch Job
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements_agent.txt
-
-      - name: Configure environment
-        run: |
-          echo "ACCOUNT_ID=${{ secrets.ACCOUNT_ID }}" >> $GITHUB_ENV
-          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
-          echo "CODEBUILD_AWS_ACCESS_KEY_ID=${{ secrets.CODEBUILD_ACCESS_KEY_ID }}" >> $GITHUB_ENV
-          echo "CODEBUILD_AWS_SECRET_ACCESS_KEY=${{ secrets.CODEBUILD_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
-          echo "CODEBUILD_AWS_SESSION_TOKEN=${{ secrets.CODEBUILD_AWS_SESSION_TOKEN }}" >> $GITHUB_ENV
-          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
-          echo "BEDROCK_INFERENCE_PROFILE_ARN=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}" >> $GITHUB_ENV
-          echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
-
-      - name: Run Security Tests
-        run: |
-          python security_test_agent.py \
-            --current-version="${{ inputs.current_version }}" \
-            --previous-version="${{ inputs.previous_version }}" \
-            --fork-url="${{ inputs.fork_url }}"
+          JOB_ID=$(aws batch submit-job \
+            --job-name "security-tests-${{ github.run_number }}" \
+            --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
+            --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
+            --parameters testType="security-tests",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
+            --query 'jobId' --output text)
+          
+          aws batch wait job-execution-complete --jobs $JOB_ID
+          echo "✅ Security tests completed: $JOB_ID"
 
       - name: Upload security test results
         uses: actions/upload-artifact@v4
@@ -340,31 +259,25 @@ jobs:
     if: needs.setup-testing.outputs.should-run-quick == 'true'
     timeout-minutes: 30
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          python-version: '3.11'
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.REGION }}
 
-      - name: Install dependencies
+      - name: Submit Quick Checks Batch Job
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements_agent.txt
-
-      - name: Configure environment
-        run: |
-          echo "GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
-          echo "REGION=${{ env.REGION }}" >> $GITHUB_ENV
-          echo "CODEBUILD_REGION=${{ env.CODEBUILD_REGION }}" >> $GITHUB_ENV
-
-      - name: Run Quick Checks
-        run: |
-          python quick_checks_agent.py \
-            --current-version="${{ inputs.current_version }}" \
-            --previous-version="${{ inputs.previous_version }}" \
-            --fork-url="${{ inputs.fork_url }}"
+          JOB_ID=$(aws batch submit-job \
+            --job-name "quick-checks-${{ github.run_number }}" \
+            --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
+            --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
+            --parameters testType="quick-checks",currentVersion="${{ inputs.current_version }}",previousVersion="${{ inputs.previous_version }}",forkUrl="${{ inputs.fork_url }}" \
+            --query 'jobId' --output text)
+          
+          aws batch wait job-execution-complete --jobs $JOB_ID
+          echo "✅ Quick checks completed: $JOB_ID"
 
       - name: Upload quick check results
         uses: actions/upload-artifact@v4
