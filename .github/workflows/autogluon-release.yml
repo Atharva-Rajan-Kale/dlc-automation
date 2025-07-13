@@ -117,7 +117,7 @@ jobs:
             --job-name "autogluon-release-${{ inputs.workflow_type }}-${{ github.run_number }}" \
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
             --job-definition "${{ secrets.BATCH_JOB_DEFINITION }}" \
-            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=jobParams,value=$JOB_PARAMS},{name=ACCOUNT_ID,value=${{ secrets.ACCOUNT_ID }}}]' \
+            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=jobParams,value=$JOB_PARAMS},{name=ACCOUNT_ID,value=${{ secrets.ACCOUNT_ID }}},{name=REGION,value=us-east-1},{name=CODEBUILD_REGION,value=us-west-2}]' \
             --query 'jobId' --output text)
           
           echo "job-id=$JOB_ID" >> $GITHUB_OUTPUT
@@ -127,15 +127,61 @@ jobs:
         run: |
           echo "⏳ Waiting for batch job completion: ${{ steps.batch-job.outputs.job-id }}"
           
+          LOG_STREAM=""
+          LAST_LOG_TIME=0
+          
           while true; do
             JOB_STATUS=$(aws batch describe-jobs --jobs ${{ steps.batch-job.outputs.job-id }} --query 'jobs[0].status' --output text)
-            echo "Current status: $JOB_STATUS"
+            echo "📊 Current status: $JOB_STATUS"
+            
+            # Get log stream name once job is running
+            if [ "$JOB_STATUS" = "RUNNING" ] && [ -z "$LOG_STREAM" ]; then
+              LOG_STREAM=$(aws batch describe-jobs --jobs ${{ steps.batch-job.outputs.job-id }} --query 'jobs[0].attempts[0].container.logStreamName' --output text 2>/dev/null || echo "")
+              if [ "$LOG_STREAM" != "" ] && [ "$LOG_STREAM" != "None" ]; then
+                echo "📝 Log stream: $LOG_STREAM"
+              fi
+            fi
+            
+            # Show real-time logs if available
+            if [ "$LOG_STREAM" != "" ] && [ "$LOG_STREAM" != "None" ]; then
+              CURRENT_TIME=$(date +%s)
+              CURRENT_TIME_MS=$((CURRENT_TIME * 1000))
+              
+              if [ $LAST_LOG_TIME -eq 0 ]; then
+                LAST_LOG_TIME=$((CURRENT_TIME_MS - 300000))  # Start 5 minutes ago
+              fi
+              
+              # Get new logs since last check
+              NEW_LOGS=$(aws logs get-log-events \
+                --log-group-name /aws/batch/job \
+                --log-stream-name "$LOG_STREAM" \
+                --start-time $LAST_LOG_TIME \
+                --query 'events[].message' \
+                --output text 2>/dev/null || echo "")
+              
+              if [ "$NEW_LOGS" != "" ] && [ "$NEW_LOGS" != "None" ]; then
+                echo "📋 Recent logs:"
+                echo "$NEW_LOGS" | head -20
+                echo "---"
+              fi
+              
+              LAST_LOG_TIME=$CURRENT_TIME_MS
+            fi
             
             if [ "$JOB_STATUS" = "SUCCEEDED" ]; then
               echo "✅ Job completed successfully"
               break
             elif [ "$JOB_STATUS" = "FAILED" ]; then
               echo "❌ Job failed"
+              # Show final logs on failure
+              if [ "$LOG_STREAM" != "" ] && [ "$LOG_STREAM" != "None" ]; then
+                echo "📋 Final logs:"
+                aws logs get-log-events \
+                  --log-group-name /aws/batch/job \
+                  --log-stream-name "$LOG_STREAM" \
+                  --query 'events[-50:].message' \
+                  --output text 2>/dev/null || echo "No logs available"
+              fi
               exit 1
             fi
             
