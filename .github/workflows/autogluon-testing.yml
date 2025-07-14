@@ -124,7 +124,7 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ secrets.ACCOUNT_ID }}:role/autogluon-github-oidc-role
+          role-to-assume: arn:aws:iam::${{ secrets.ACCOUNT_ID }}:role/dlc-automation-oidc-role
           aws-region: ${{ env.REGION }}
 
       - name: Submit Pip Check Batch Job
@@ -162,7 +162,7 @@ jobs:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ secrets.ACCOUNT_ID }}:role/autogluon-github-oidc-role
+          role-to-assume: arn:aws:iam::${{ secrets.ACCOUNT_ID }}:role/dlc-automation-oidc-role
           aws-region: ${{ env.REGION }}
 
       - name: Submit AutoGluon Tests Batch Job
