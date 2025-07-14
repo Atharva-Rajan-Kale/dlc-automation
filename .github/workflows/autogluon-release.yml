@@ -37,6 +37,11 @@ on:
         type: boolean
         default: true
 
+permissions:
+  id-token: write   # Required for OIDC
+  contents: read
+  actions: read
+
 env:
   PYTHONPATH: ${{ github.workspace }}/src
   REGION: us-east-1
@@ -87,7 +92,15 @@ jobs:
     needs: [setup, validate-inputs]
     timeout-minutes: 180
     steps:
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.ACCOUNT_ID }}:role/autogluon-github-oidc-role
+          aws-region: ${{ env.REGION }}
+          
+      # Fallback to access keys if OIDC fails
+      - name: Configure AWS credentials (Access Keys Fallback)
+        if: failure()
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -219,6 +232,7 @@ jobs:
           echo "**Testing Enabled:** ${{ inputs.enable_testing }}" >> $GITHUB_STEP_SUMMARY
           echo "**Region:** ${{ env.REGION }}" >> $GITHUB_STEP_SUMMARY
           echo "**CodeBuild Region:** ${{ env.CODEBUILD_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Authentication:** OIDC" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -f "automation_logs/enhanced_main_automation.log" ]; then
@@ -239,6 +253,7 @@ jobs:
             echo "✅ AutoGluon Release Automation completed successfully!"
             echo "Version: ${{ inputs.previous_version }} → ${{ inputs.current_version }}"
             echo "Workflow: ${{ inputs.workflow_type }}"
+            echo "Authentication: OIDC"
           else
             echo "❌ AutoGluon Release Automation failed or was cancelled"
             echo "Please check the logs for details"

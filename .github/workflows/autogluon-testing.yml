@@ -40,6 +40,12 @@ on:
       - 'requirements*.txt'
       - '.github/workflows/**'
 
+permissions:
+  id-token: write   # Required for OIDC
+  contents: read
+  actions: read
+  pull-requests: write
+
 env:
   PYTHONPATH: ${{ github.workspace }}/src
   REGION: us-east-1
@@ -115,12 +121,10 @@ jobs:
     if: needs.setup-testing.outputs.should-run-pip == 'true'
     timeout-minutes: 60
     steps:
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          role-to-assume: arn:aws:iam::${{ secrets.ACCOUNT_ID }}:role/autogluon-github-oidc-role
           aws-region: ${{ env.REGION }}
 
       - name: Submit Pip Check Batch Job
@@ -155,12 +159,10 @@ jobs:
     if: needs.setup-testing.outputs.should-run-autogluon == 'true'
     timeout-minutes: 90
     steps:
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          role-to-assume: arn:aws:iam::${{ secrets.ACCOUNT_ID }}:role/autogluon-github-oidc-role
           aws-region: ${{ env.REGION }}
 
       - name: Submit AutoGluon Tests Batch Job
@@ -195,12 +197,10 @@ jobs:
     if: needs.setup-testing.outputs.should-run-sagemaker == 'true'
     timeout-minutes: 120
     steps:
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          role-to-assume: arn:aws:iam::${{ secrets.ACCOUNT_ID }}:role/autogluon-github-oidc-role
           aws-region: ${{ env.REGION }}
 
       - name: Submit SageMaker Tests Batch Job
@@ -235,12 +235,10 @@ jobs:
     if: needs.setup-testing.outputs.should-run-security == 'true'
     timeout-minutes: 90
     steps:
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          role-to-assume: arn:aws:iam::${{ secrets.ACCOUNT_ID }}:role/autogluon-github-oidc-role
           aws-region: ${{ env.REGION }}
 
       - name: Submit Security Tests Batch Job
@@ -275,12 +273,10 @@ jobs:
     if: needs.setup-testing.outputs.should-run-quick == 'true'
     timeout-minutes: 30
     steps:
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          role-to-assume: arn:aws:iam::${{ secrets.ACCOUNT_ID }}:role/autogluon-github-oidc-role
           aws-region: ${{ env.REGION }}
 
       - name: Submit Quick Checks Batch Job
@@ -321,6 +317,7 @@ jobs:
           echo "**Test Suite:** ${{ inputs.test_suite }}" >> $GITHUB_STEP_SUMMARY
           echo "**Region:** ${{ env.REGION }}" >> $GITHUB_STEP_SUMMARY
           echo "**CodeBuild Region:** ${{ env.CODEBUILD_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Authentication:** OIDC" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Check each job result
