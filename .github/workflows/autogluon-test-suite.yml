@@ -1,0 +1,224 @@
+name: AutoGluon Test Suite
+
+on:
+  workflow_dispatch:
+    inputs:
+      python_version:
+        description: 'Python version to use'
+        required: true
+        default: '3.11'
+        type: choice
+        options:
+          - '3.9'
+          - '3.10'
+          - '3.11'
+      autogluon_version:
+        description: 'AutoGluon version to test'
+        required: true
+        type: string
+      fork_url:
+        description: 'Fork URL for testing'
+        required: true
+        default: 'https://github.com/autogluon/autogluon'
+        type: string
+
+env:
+  REGION: us-east-1
+  CODEBUILD_REGION: us-west-2
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      python-version: ${{ steps.setup.outputs.python-version }}
+    steps:
+      - name: Setup workflow parameters
+        id: setup
+        run: |
+          echo "python-version=${{ inputs.python_version }}" >> $GITHUB_OUTPUT
+          echo "🚀 Starting AutoGluon Test Suite"
+          echo "Version: ${{ inputs.autogluon_version }}"
+          echo "Python: ${{ inputs.python_version }}"
+
+  validate-inputs:
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - name: Validate version format
+        run: |
+          if [[ ! "${{ inputs.autogluon_version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Invalid version format: ${{ inputs.autogluon_version }}"
+            exit 1
+          fi
+          echo "✅ Version format is valid"
+
+      - name: Validate fork URL
+        run: |
+          if [[ ! "${{ inputs.fork_url }}" =~ ^https://github\.com/.+/.+$ ]]; then
+            echo "❌ Invalid fork URL format: ${{ inputs.fork_url }}"
+            exit 1
+          fi
+          echo "✅ Fork URL format is valid"
+
+  run-test-suite:
+    runs-on: ubuntu-latest
+    needs: [setup, validate-inputs]
+    timeout-minutes: 120
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.ACCOUNT_ID }}:role/dlc-automation-oidc-role
+          aws-region: ${{ env.REGION }}
+          
+      # Fallback to access keys if OIDC fails
+      - name: Configure AWS credentials (Access Keys Fallback)
+        if: failure()
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Submit AWS Batch Job for Pip Check
+        id: pip-check-job
+        run: |
+          echo "🔍 Running pip check test"
+          
+          PIP_CHECK_JOB_ID=$(aws batch submit-job \
+            --job-name "autogluon-pip-check-${{ github.run_number }}" \
+            --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
+            --job-definition "${{ secrets.BATCH_JOB_DEFINITION }}" \
+            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.autogluon_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=ACCOUNT_ID,value=${{ secrets.ACCOUNT_ID }}},{name=REGION,value=${{ env.REGION }}},{name=CODEBUILD_REGION,value=${{ env.CODEBUILD_REGION }}},{name=PYTHON_VERSION,value=${{ inputs.python_version }}},{name=BEDROCK_INFERENCE_PROFILE_ARN,value=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}}]' \
+            --query 'jobId' --output text)
+          
+          echo "pip-check-job-id=$PIP_CHECK_JOB_ID" >> $GITHUB_OUTPUT
+          echo "✅ Pip check job submitted: $PIP_CHECK_JOB_ID"
+          
+          # Wait for pip check job to complete
+          while true; do
+            JOB_STATUS=$(aws batch describe-jobs --jobs $PIP_CHECK_JOB_ID --query 'jobs[0].status' --output text)
+            echo "📊 Pip check status: $JOB_STATUS"
+            
+            if [ "$JOB_STATUS" = "SUCCEEDED" ]; then
+              echo "✅ Pip check completed successfully"
+              break
+            elif [ "$JOB_STATUS" = "FAILED" ]; then
+              echo "❌ Pip check failed"
+              exit 1
+            fi
+            
+            sleep 30
+          done
+
+      - name: Submit AWS Batch Job for AutoGluon Tests
+        id: autogluon-tests-job
+        run: |
+          echo "🧪 Running AutoGluon module tests"
+          
+          # Run tests for each module
+          for MODULE in "tabular" "automm" "ts"; do
+            echo "Testing module: $MODULE"
+            
+            TEST_JOB_ID=$(aws batch submit-job \
+              --job-name "autogluon-$MODULE-test-${{ github.run_number }}" \
+              --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
+              --job-definition "${{ secrets.BATCH_JOB_DEFINITION }}" \
+              --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.autogluon_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=MODULE,value=$MODULE},{name=ACCOUNT_ID,value=${{ secrets.ACCOUNT_ID }}},{name=REGION,value=${{ env.REGION }}},{name=CODEBUILD_REGION,value=${{ env.CODEBUILD_REGION }}},{name=PYTHON_VERSION,value=${{ inputs.python_version }}}]' \
+              --query 'jobId' --output text)
+            
+            echo "$MODULE-test-job-id=$TEST_JOB_ID" >> $GITHUB_OUTPUT
+            echo "✅ $MODULE test job submitted: $TEST_JOB_ID"
+            
+            # Wait for test job to complete
+            while true; do
+              JOB_STATUS=$(aws batch describe-jobs --jobs $TEST_JOB_ID --query 'jobs[0].status' --output text)
+              echo "📊 $MODULE test status: $JOB_STATUS"
+              
+              if [ "$JOB_STATUS" = "SUCCEEDED" ]; then
+                echo "✅ $MODULE test completed successfully"
+                break
+              elif [ "$JOB_STATUS" = "FAILED" ]; then
+                echo "❌ $MODULE test failed"
+                exit 1
+              fi
+              
+              sleep 30
+            done
+          done
+
+      - name: Submit AWS Batch Job for SageMaker Tests
+        id: sagemaker-tests-job
+        run: |
+          echo "☁️ Running SageMaker integration tests"
+          
+          SM_TEST_JOB_ID=$(aws batch submit-job \
+            --job-name "autogluon-sagemaker-test-${{ github.run_number }}" \
+            --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
+            --job-definition "${{ secrets.BATCH_JOB_DEFINITION }}" \
+            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.autogluon_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=TEST_TYPE,value=sagemaker},{name=ACCOUNT_ID,value=${{ secrets.ACCOUNT_ID }}},{name=REGION,value=${{ env.REGION }}},{name=CODEBUILD_REGION,value=${{ env.CODEBUILD_REGION }}},{name=PYTHON_VERSION,value=${{ inputs.python_version }}},{name=BEDROCK_INFERENCE_PROFILE_ARN,value=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}}]' \
+            --query 'jobId' --output text)
+          
+          echo "sagemaker-test-job-id=$SM_TEST_JOB_ID" >> $GITHUB_OUTPUT
+          echo "✅ SageMaker test job submitted: $SM_TEST_JOB_ID"
+          
+          # Wait for SageMaker test job to complete
+          while true; do
+            JOB_STATUS=$(aws batch describe-jobs --jobs $SM_TEST_JOB_ID --query 'jobs[0].status' --output text)
+            echo "📊 SageMaker test status: $JOB_STATUS"
+            
+            if [ "$JOB_STATUS" = "SUCCEEDED" ]; then
+              echo "✅ SageMaker test completed successfully"
+              break
+            elif [ "$JOB_STATUS" = "FAILED" ]; then
+              echo "❌ SageMaker test failed"
+              exit 1
+            fi
+            
+            sleep 30
+          done
+
+      - name: Upload test logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-logs-${{ inputs.autogluon_version }}
+          path: |
+            test_logs/
+            *.log
+          retention-days: 14
+
+      - name: Generate summary
+        if: always()
+        run: |
+          echo "## 🧪 AutoGluon Test Suite Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ inputs.autogluon_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Python Version:** ${{ inputs.python_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Fork URL:** ${{ inputs.fork_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** ${{ env.REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**CodeBuild Region:** ${{ env.CODEBUILD_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Pip Check: ${{ steps.pip-check-job.outcome == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- AutoGluon Module Tests: ${{ steps.autogluon-tests-job.outcome == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- SageMaker Tests: ${{ steps.sagemaker-tests-job.outcome == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
+
+  notify-completion:
+    runs-on: ubuntu-latest
+    needs: [run-test-suite]
+    if: always()()
+    steps:
+      - name: Notify completion
+        run: |
+          if [ "${{ needs.run-test-suite.result }}" == "success" ]; then
+            echo "✅ AutoGluon Test Suite completed successfully!"
+            echo "Version: ${{ inputs.autogluon_version }}"
+            echo "Python: ${{ inputs.python_version }}"
+          else
+            echo "❌ AutoGluon Test Suite failed or was cancelled"
+            echo "Please check the logs for details"
+            exit 1
+          fi

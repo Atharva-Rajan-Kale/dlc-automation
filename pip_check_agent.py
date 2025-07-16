@@ -1142,12 +1142,12 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
         
         for method in methods:
             try:
-                self.logger.info(f"🧪 Trying {method['name']} (timeout: 10s)")
+                self.logger.info(f"🧪 Trying {method['name']} (timeout: 300s)")
                 result = self.run_subprocess_with_logging(
                     method['cmd'], 
                     capture_output=True, 
                     text=True, 
-                    timeout=10  # 10 second timeout for pip list
+                    timeout=300  # 300 second timeout for pip list
                 )
                 
                 if result.returncode == 0 and result.stdout.strip():
@@ -1173,7 +1173,7 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                         return packages
                     
             except subprocess.TimeoutExpired:
-                self.logger.warning(f"⏰ {method['name']} timed out after 10s (but may have produced output)")
+                self.logger.warning(f"⏰ {method['name']} timed out after 300s (but may have produced output)")
                 # For inference images that hang but produce output, we could try to get partial output
                 # but subprocess.TimeoutExpired doesn't give us access to partial stdout easily
                 continue
