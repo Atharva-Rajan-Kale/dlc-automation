@@ -209,7 +209,7 @@ jobs:
   notify-completion:
     runs-on: ubuntu-latest
     needs: [run-test-suite]
-    if: always()()
+    if: always()
     steps:
       - name: Notify completion
         run: |
