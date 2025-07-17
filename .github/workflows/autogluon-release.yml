@@ -130,7 +130,7 @@ jobs:
             --job-name "autogluon-release-${{ inputs.workflow_type }}-${{ github.run_number }}" \
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
             --job-definition "${{ secrets.BATCH_JOB_DEFINITION }}" \
-            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=jobParams,value=$JOB_PARAMS},{name=ACCOUNT_ID,value=${{ secrets.ACCOUNT_ID }}},{name=REGION,value=us-east-1},{name=CODEBUILD_REGION,value=us-west-2},{name=BEDROCK_INFERENCE_MODEL_ARN,value=${{ secrets.BEDROCK_INFERENCE_MODEL_ARN }}}]'            
+            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=jobParams,value=$JOB_PARAMS},{name=ACCOUNT_ID,value=${{ secrets.ACCOUNT_ID }}},{name=REGION,value=us-east-1},{name=CODEBUILD_REGION,value=us-west-2},{name=BEDROCK_INFERENCE_MODEL_ARN,value=${{ secrets.BEDROCK_INFERENCE_MODEL_ARN }}}]' \         
             --query 'jobId' --output text)
           
           echo "job-id=$JOB_ID" >> $GITHUB_OUTPUT
