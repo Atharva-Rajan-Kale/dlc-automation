@@ -42,7 +42,6 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
         # Predefined list of packages to check for version synchronization
         self.packages_to_sync = [
             "fastai",
-            "datasets", 
             "gluonts",
             # Add more packages as needed
         ]
@@ -404,7 +403,7 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
             
             # Use the working command format with -it and bash -c
             cmd = [
-                "docker", "run", "-it", image_uri, "bash", "-c",
+                "docker", "run", "--rm", image_uri, "bash", "-c",  # ✅ --rm works in batch
                 f"pip install pipdeptree && pip install --dry-run '{constraint}'"
             ]
             
@@ -1256,58 +1255,55 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
             
             # Step 5: Rebuild if changes were made
             if dockerfile_changes_made:
-                if self.confirm_rebuild():
-                    self.logger.info("🏗️ Step 4: Rebuilding Docker images...")
-                    if not self.trigger_rebuild():
-                        self.logger.error("❌ Rebuild failed!")
-                        return False
-                    
-                    # Step 6: Re-run pip check after rebuild
-                    self.logger.info("🔄 Step 5: Re-running pip check after rebuild...")
-                    post_rebuild_conflicts = {}
-                    
-                    # Get new images after rebuild (could be the same URIs or new ones)
-                    latest_images_post = self.get_latest_ecr_images()
-                    
-                    for repo, images in latest_images_post.items():
-                        container_type = 'training' if 'training' in repo else 'inference'
-                        
-                        for image_uri in images:
-                            success, output = self.run_pip_check_on_image(image_uri)
-                            if not success and "No dependency conflicts found" not in output:
-                                conflicts = self.parse_conflicts_with_ai(output)
-                                if conflicts:
-                                    post_rebuild_conflicts[image_uri] = {
-                                        'container_type': container_type,
-                                        'conflicts': conflicts
-                                    }
-                    
-                    # Step 7: Handle remaining conflicts
-                    if post_rebuild_conflicts:
-                        self.logger.info("🔄 Step 6: Handling remaining conflicts...")
-                        
-                        for image_uri, conflict_data in post_rebuild_conflicts.items():
-                            container_type = conflict_data['container_type']
-                            conflicts = conflict_data['conflicts']
-                            
-                            categorized = self.categorize_conflicts(conflicts)
-                            
-                            # Handle failed platform conflicts with > constraint
-                            platform_conflicts = categorized['platform']
-                            if platform_conflicts:
-                                self.logger.info(f"🔧 Applying > constraint for failed platform conflicts")
-                                self.handle_failed_platform_conflicts(platform_conflicts, container_type)
-                            
-                            # Whitelist remaining conflicts (except platform ones)
-                            all_remaining = categorized['one_to_one'] + categorized['one_to_many']
-                            if all_remaining:
-                                self.whitelist_remaining_conflicts(all_remaining, container_type)
-                    
-                    self.logger.info("✅ Pip Check Agent completed successfully!")
-                    return True
-                else:
-                    self.logger.info("ℹ️ Rebuild cancelled by user")
+                self.logger.info("🏗️ Step 4: Rebuilding Docker images...")
+                if not self.trigger_rebuild():
+                    self.logger.error("❌ Rebuild failed!")
                     return False
+                
+                # Step 6: Re-run pip check after rebuild
+                self.logger.info("🔄 Step 5: Re-running pip check after rebuild...")
+                post_rebuild_conflicts = {}
+                
+                # Get new images after rebuild (could be the same URIs or new ones)
+                latest_images_post = self.get_latest_ecr_images()
+                
+                for repo, images in latest_images_post.items():
+                    container_type = 'training' if 'training' in repo else 'inference'
+                    
+                    for image_uri in images:
+                        success, output = self.run_pip_check_on_image(image_uri)
+                        if not success and "No dependency conflicts found" not in output:
+                            conflicts = self.parse_conflicts_with_ai(output)
+                            if conflicts:
+                                post_rebuild_conflicts[image_uri] = {
+                                    'container_type': container_type,
+                                    'conflicts': conflicts
+                                }
+                
+                # Step 7: Handle remaining conflicts
+                if post_rebuild_conflicts:
+                    self.logger.info("🔄 Step 6: Handling remaining conflicts...")
+                    
+                    for image_uri, conflict_data in post_rebuild_conflicts.items():
+                        container_type = conflict_data['container_type']
+                        conflicts = conflict_data['conflicts']
+                        
+                        categorized = self.categorize_conflicts(conflicts)
+                        
+                        # Handle failed platform conflicts with > constraint
+                        platform_conflicts = categorized['platform']
+                        if platform_conflicts:
+                            self.logger.info(f"🔧 Applying > constraint for failed platform conflicts")
+                            self.handle_failed_platform_conflicts(platform_conflicts, container_type)
+                        
+                        # Whitelist remaining conflicts (except platform ones)
+                        all_remaining = categorized['one_to_one'] + categorized['one_to_many']
+                        if all_remaining:
+                            self.whitelist_remaining_conflicts(all_remaining, container_type)
+                
+                self.logger.info("✅ Pip Check Agent completed successfully!")
+                return True
+                
             else:
                 self.logger.info("ℹ️ No Dockerfile changes made, skipping rebuild")
                 return True
