@@ -1,5 +1,5 @@
-# .github/workflows/autogluon-release.yml
-name: AutoGluon Release Automation
+# .github/workflows/autogluon-test-agent.yml
+name: AutoGluon Test Agent
 
 on:
   workflow_dispatch:
@@ -16,26 +16,20 @@ on:
         description: 'Your fork URL'
         required: true
         type: string
-      workflow_type:
-        description: 'Workflow type to run'
+      test_suite:
+        description: 'Test suite to run'
         required: true
         type: choice
         options:
-          - 'complete'
-          - 'steps-125'
-          - 'steps-34'
-          - 'step-6'
-          - 'create-pr'
-          - 'infrastructure'
-          - 'release-images'
-          - 'asimov-scan'
-          - 'post-pr-workflow'
-        default: 'complete'
-      enable_testing:
-        description: 'Enable testing agents'
+          - 'all'
+          - 'tabular'
+          - 'automm'
+          - 'timeseries'
+        default: 'all'
+      image_tag:
+        description: 'Specific image tag to test (optional - will use latest if not provided)'
         required: false
-        type: boolean
-        default: true
+        type: string
 
 permissions:
   id-token: write   # Required for OIDC
@@ -52,16 +46,17 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       python-version: ${{ steps.setup.outputs.python-version }}
-      workflow-type: ${{ steps.setup.outputs.workflow-type }}
+      test-suite: ${{ steps.setup.outputs.test-suite }}
     steps:
       - name: Setup workflow parameters
         id: setup
         run: |
           echo "python-version=3.11" >> $GITHUB_OUTPUT
-          echo "workflow-type=${{ inputs.workflow_type }}" >> $GITHUB_OUTPUT
-          echo "🚀 Starting AutoGluon Release Automation"
-          echo "Version: ${{ inputs.previous_version }} → ${{ inputs.current_version }}"
-          echo "Workflow: ${{ inputs.workflow_type }}"
+          echo "test-suite=${{ inputs.test_suite }}" >> $GITHUB_OUTPUT
+          echo "🧪 Starting AutoGluon Test Agent"
+          echo "Version: ${{ inputs.current_version }}"
+          echo "Test Suite: ${{ inputs.test_suite }}"
+          echo "Image Tag: ${{ inputs.image_tag || 'latest' }}"
 
   validate-inputs:
     runs-on: ubuntu-latest
@@ -87,10 +82,10 @@ jobs:
           fi
           echo "✅ Fork URL format is valid"
 
-  main-automation:
+  test-agent:
     runs-on: ubuntu-latest
     needs: [setup, validate-inputs]
-    timeout-minutes: 180
+    timeout-minutes: 120
     steps:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -108,37 +103,37 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.REGION }}
 
-      - name: Submit AWS Batch Job
+      - name: Submit AWS Batch Job for Test Agent
         id: batch-job
         run: |
-          echo "🚀 Submitting AutoGluon Release Automation to AWS Batch"
+          echo "🧪 Submitting AutoGluon Test Agent to AWS Batch"
           
-          # Determine job parameters based on workflow type
-          case "${{ inputs.workflow_type }}" in
-            "complete") JOB_PARAMS="--complete" ;;
-            "steps-125") JOB_PARAMS="--steps-125" ;;
-            "steps-34") JOB_PARAMS="--steps-34" ;;
-            "step-6") JOB_PARAMS="--step-6-only" ;;
-            "create-pr") JOB_PARAMS="--pr-only" ;;
-            "infrastructure") JOB_PARAMS="--infrastructure" ;;
-            "release-images") JOB_PARAMS="--release-images" ;;
-            "asimov-scan") JOB_PARAMS="--asimov-scan" ;;
-            "post-pr-workflow") JOB_PARAMS="--post-pr-workflow" ;;
-          esac
+          # Use the test agent script instead of the main automation
+          JOB_PARAMS="--autogluon-tests"
+          
+          # Add test suite parameter
+          if [ "${{ inputs.test_suite }}" != "all" ]; then
+            JOB_PARAMS="$JOB_PARAMS --test-suite=${{ inputs.test_suite }}"
+          fi
+          
+          # Add image tag if provided
+          if [ "${{ inputs.image_tag }}" != "" ]; then
+            JOB_PARAMS="$JOB_PARAMS --image-tag=${{ inputs.image_tag }}"
+          fi
           
           JOB_ID=$(aws batch submit-job \
-            --job-name "autogluon-release-${{ inputs.workflow_type }}-${{ github.run_number }}" \
+            --job-name "autogluon-test-agent-${{ inputs.test_suite }}-${{ github.run_number }}" \
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
-            --job-definition "${{ secrets.BATCH_JOB_DEFINITION }}" \
-            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=jobParams,value=$JOB_PARAMS},{name=ACCOUNT_ID,value=${{ secrets.ACCOUNT_ID }}},{name=REGION,value=us-east-1},{name=CODEBUILD_REGION,value=us-west-2},{name=BEDROCK_INFERENCE_PROFILE_ARN,value=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}}]' \
+            --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
+            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=jobParams,value=$JOB_PARAMS},{name=ACCOUNT_ID,value=${{ secrets.ACCOUNT_ID }}},{name=REGION,value=us-east-1},{name=CODEBUILD_REGION,value=us-west-2}]'            
             --query 'jobId' --output text)
           
           echo "job-id=$JOB_ID" >> $GITHUB_OUTPUT
           echo "✅ Batch job submitted: $JOB_ID"
 
-      - name: Wait for Batch Job Completion
+      - name: Wait for Test Agent Completion
         run: |
-          echo "⏳ Waiting for batch job completion: ${{ steps.batch-job.outputs.job-id }}"
+          echo "⏳ Waiting for test agent completion: ${{ steps.batch-job.outputs.job-id }}"
           
           LOG_STREAM=""
           LAST_LOG_TIME=0
@@ -173,7 +168,7 @@ jobs:
                 --output text 2>/dev/null || echo "")
               
               if [ "$NEW_LOGS" != "" ] && [ "$NEW_LOGS" != "None" ]; then
-                echo "📋 Recent logs:"
+                echo "📋 Recent test logs:"
                 echo "$NEW_LOGS" | head -20
                 echo "---"
               fi
@@ -182,13 +177,13 @@ jobs:
             fi
             
             if [ "$JOB_STATUS" = "SUCCEEDED" ]; then
-              echo "✅ Job completed successfully"
+              echo "✅ Test agent completed successfully"
               break
             elif [ "$JOB_STATUS" = "FAILED" ]; then
-              echo "❌ Job failed"
+              echo "❌ Test agent failed"
               # Show final logs on failure
               if [ "$LOG_STREAM" != "" ] && [ "$LOG_STREAM" != "None" ]; then
-                echo "📋 Final logs:"
+                echo "📋 Final test logs:"
                 aws logs get-log-events \
                   --log-group-name /aws/batch/job \
                   --log-stream-name "$LOG_STREAM" \
@@ -201,61 +196,51 @@ jobs:
             sleep 30
           done
 
-      - name: Upload automation logs
+      - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: automation-logs-${{ inputs.workflow_type }}-${{ inputs.current_version }}
+          name: test-results-${{ inputs.test_suite }}-${{ inputs.current_version }}
           path: |
-            automation_logs/
+            test_results/
+            test_logs/
             *.log
           retention-days: 30
 
-      - name: Upload step outputs
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: step-outputs-${{ inputs.workflow_type }}-${{ inputs.current_version }}
-          path: |
-            step_outputs/
-            results/
-          retention-days: 7
-
-      - name: Generate summary
+      - name: Generate test summary
         if: always()
         run: |
-          echo "## 🤖 AutoGluon Release Automation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🧪 AutoGluon Test Agent Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** ${{ inputs.previous_version }} → ${{ inputs.current_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Workflow Type:** ${{ inputs.workflow_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ inputs.current_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Test Suite:** ${{ inputs.test_suite }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image Tag:** ${{ inputs.image_tag || 'latest' }}" >> $GITHUB_STEP_SUMMARY
           echo "**Fork URL:** ${{ inputs.fork_url }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Testing Enabled:** ${{ inputs.enable_testing }}" >> $GITHUB_STEP_SUMMARY
           echo "**Region:** ${{ env.REGION }}" >> $GITHUB_STEP_SUMMARY
-          echo "**CodeBuild Region:** ${{ env.CODEBUILD_REGION }}" >> $GITHUB_STEP_SUMMARY
           echo "**Authentication:** OIDC" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [ -f "automation_logs/enhanced_main_automation.log" ]; then
-            echo "**Recent Log Output:**" >> $GITHUB_STEP_SUMMARY
+          if [ -f "test_logs/autogluon_test_agent.log" ]; then
+            echo "**Recent Test Output:**" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            tail -50 automation_logs/enhanced_main_automation.log >> $GITHUB_STEP_SUMMARY
+            tail -50 test_logs/autogluon_test_agent.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
   notify-completion:
     runs-on: ubuntu-latest
-    needs: [main-automation]
+    needs: [test-agent]
     if: always()
     steps:
-      - name: Notify completion
+      - name: Notify test completion
         run: |
-          if [ "${{ needs.main-automation.result }}" == "success" ]; then
-            echo "✅ AutoGluon Release Automation completed successfully!"
-            echo "Version: ${{ inputs.previous_version }} → ${{ inputs.current_version }}"
-            echo "Workflow: ${{ inputs.workflow_type }}"
+          if [ "${{ needs.test-agent.result }}" == "success" ]; then
+            echo "✅ AutoGluon Test Agent completed successfully!"
+            echo "Version: ${{ inputs.current_version }}"
+            echo "Test Suite: ${{ inputs.test_suite }}"
             echo "Authentication: OIDC"
           else
-            echo "❌ AutoGluon Release Automation failed or was cancelled"
+            echo "❌ AutoGluon Test Agent failed or was cancelled"
             echo "Please check the logs for details"
             exit 1
           fi
