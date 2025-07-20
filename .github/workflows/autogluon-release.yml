@@ -127,10 +127,10 @@ jobs:
           esac
           
           JOB_ID=$(aws batch submit-job \
-            --job-name "autogluon-pr-only-${{ inputs.workflow_type }}-${{ github.run_number }}" \
+            --job-name "autogluon-release-${{ inputs.workflow_type }}-${{ github.run_number }}" \
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
             --job-definition "${{ secrets.BATCH_JOB_DEFINITION }}" \
-            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=sourceRepoUrl,value=${{ inputs.source_repo_url }}},{name=sourceBranch,value=${{ inputs.source_branch }}},{name=jobParams,value=$JOB_PARAMS},{name=ACCOUNT_ID,value=${{ secrets.ACCOUNT_ID }}},{name=REGION,value=us-east-1},{name=CODEBUILD_REGION,value=us-west-2},{name=BEDROCK_INFERENCE_PROFILE_ARN,value=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}},{name=enableTesting,value=${{ inputs.enable_testing }}},{name=CODEBUILD_AWS_ACCESS_KEY_ID,value=${{ secrets.CODEBUILD_AWS_ACCESS_KEY_ID }}},{name=CODEBUILD_AWS_SECRET_ACCESS_KEY,value=${{ secrets.CODEBUILD_AWS_SECRET_ACCESS_KEY }}},{name=CODEBUILD_AWS_SESSION_TOKEN,value=${{ secrets.CODEBUILD_AWS_SESSION_TOKEN }}}]' \
+            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=jobParams,value=$JOB_PARAMS},{name=ACCOUNT_ID,value=${{ secrets.ACCOUNT_ID }}},{name=REGION,value=us-east-1},{name=CODEBUILD_REGION,value=us-west-2},{name=BEDROCK_INFERENCE_PROFILE_ARN,value=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}}]' \
             --query 'jobId' --output text)
           
           echo "job-id=$JOB_ID" >> $GITHUB_OUTPUT
