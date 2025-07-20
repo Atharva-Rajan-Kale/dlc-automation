@@ -201,18 +201,6 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                 {
                     "name": "Method 1: Override entrypoint",
                     "cmd": ["docker", "run", "--rm", "--entrypoint", "pip", image_uri, "check"]
-                },
-                {
-                    "name": "Method 2: Direct bash approach", 
-                    "cmd": ["docker", "run", "--rm", image_uri, "bash", "-c", "pip check"]
-                },
-                {
-                    "name": "Method 3: Python module approach",
-                    "cmd": ["docker", "run", "--rm", image_uri, "python", "-m", "pip", "check"]
-                },
-                {
-                    "name": "Method 4: Simple pip check",
-                    "cmd": ["docker", "run", "--rm", image_uri, "pip", "check"]
                 }
             ]
         else:
@@ -220,18 +208,6 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                 {
                     "name": "Method 1: Direct pip check",
                     "cmd": ["docker", "run", "--rm", image_uri, "pip", "check"]
-                },
-                {
-                    "name": "Method 2: Override entrypoint",
-                    "cmd": ["docker", "run", "--rm", "--entrypoint", "pip", image_uri, "check"]
-                },
-                {
-                    "name": "Method 3: Bash with pip check",
-                    "cmd": ["docker", "run", "--rm", image_uri, "bash", "-c", "pip check"]
-                },
-                {
-                    "name": "Method 4: Python module pip",
-                    "cmd": ["docker", "run", "--rm", image_uri, "python", "-m", "pip", "check"]
                 }
             ]
         

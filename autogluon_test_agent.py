@@ -6,6 +6,7 @@ from typing import Dict, Optional
 import boto3
 from common import BaseAutomation
 from automation_logger import LoggerMixin
+import uuid
 
 class AutoGluonTestAgent(BaseAutomation, LoggerMixin):
     """Simple test runner for AutoGluon tests on the most recent training CPU image"""
@@ -125,36 +126,76 @@ class AutoGluonTestAgent(BaseAutomation, LoggerMixin):
         print(f"🐍 Module: {test_module}")
         print(f"⚙️  Function: {test_function}")
         
-        # Container mount paths
+        container_name = f"autogluon-test-{test_name}-{uuid.uuid4().hex[:8]}"
         container_mount_path = "/autogluon_tests/"
         
-        # Test command to run inside container
-        test_command = f"cd {container_mount_path} && python -c 'from {test_module} import {test_function}; {test_function}()'"
+        print(f"🔄 Ensuring image is available locally...")
+        pull_cmd = ["docker", "pull", image_uri]
+        try:
+            result = subprocess.run(pull_cmd, capture_output=False, timeout=600)
+            if result.returncode != 0:
+                print(f"⚠️ Image pull had issues, but continuing...")
+        except subprocess.TimeoutExpired:
+            print(f"⚠️ Image pull timed out after 10 minutes, but continuing...")
+        except Exception as e:
+            print(f"⚠️ Image pull error: {e}, but continuing...")
         
-        docker_cmd = [
-            "docker", "run", "--rm",
+        create_cmd = [
+            "docker", "create", "--name", container_name,
             "--shm-size=2g",
-            "-v", f"{self.test_files_dir}:{container_mount_path}",
             "-w", container_mount_path,
             image_uri,
-            "bash", "-c", test_command
+            "sleep", "3600"
         ]
         
-        print(f"🐳 Docker Command:")
-        print(f"   docker run --rm --shm-size=2g \\")
-        print(f"     -v {self.test_files_dir}:{container_mount_path} \\")
-        print(f"     -w {container_mount_path} \\")
-        print(f"     {image_uri.split('/')[-1]} \\")
-        print(f"     bash -c \"cd {container_mount_path} && python -c 'from {test_module} import {test_function}; {test_function}()'\"")
-        print(f"\n🚀 Starting test execution...")
-        print("-" * 70)
+        print(f"🐳 Creating container: {container_name}")
         
         try:
-            # Run with real-time output streaming
-            result = self.run_subprocess_with_logging(
-                docker_cmd,
-                capture_output=False
-            )
+            result = subprocess.run(create_cmd, capture_output=True, text=True, timeout=300) 
+            if result.returncode != 0:
+                print(f"❌ Failed to create container: {result.stderr}")
+                return False
+            
+            print(f"📁 Copying test files to container...")
+            copy_cmd = [
+                "docker", "cp", 
+                str(self.test_files_dir) + "/.",  # Copy contents of directory
+                f"{container_name}:{container_mount_path}"
+            ]
+            
+            result = subprocess.run(copy_cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode != 0:
+                print(f"❌ Failed to copy files: {result.stderr}")
+                return False
+            start_cmd = ["docker", "start", container_name]
+            result = subprocess.run(start_cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode != 0:
+                print(f"❌ Failed to start container: {result.stderr}")
+                return False
+            
+            test_command = f"cd {container_mount_path} && python -c 'from {test_module} import {test_function}; {test_function}()'"
+            
+            exec_cmd = [
+                "docker", "exec", container_name,
+                "bash", "-c", test_command
+            ]
+            
+            print(f"🚀 Executing test in container...")
+            print(f"   Command: {test_command}")
+            print("-" * 70)
+            
+            try:
+                result = self.run_subprocess_with_logging(
+                    exec_cmd,
+                    capture_output=False,
+                    timeout=1800 
+                )
+            except TypeError:
+                result = subprocess.run(
+                    exec_cmd,
+                    capture_output=False,
+                    timeout=1800
+                )
             
             success = result.returncode == 0
             
@@ -167,9 +208,9 @@ class AutoGluonTestAgent(BaseAutomation, LoggerMixin):
                 
             return success
             
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
             print("-" * 70)
-            print(f"⏰ {test_name.upper()} TEST TIMED OUT (30 minutes)")
+            print(f"⏰ {test_name.upper()} TEST TIMED OUT: {str(e)}")
             print(f"{'='*70}\n")
             return False
             
@@ -184,13 +225,20 @@ class AutoGluonTestAgent(BaseAutomation, LoggerMixin):
             print(f"❌ {test_name.upper()} TEST EXECUTION ERROR: {str(e)}")
             print(f"{'='*70}\n")
             return False
+            
+        finally:
+            try:
+                cleanup_cmd = ["docker", "rm", "-f", container_name]
+                subprocess.run(cleanup_cmd, capture_output=True, timeout=30)
+                print(f"🧹 Cleaned up container: {container_name}")
+            except:
+                pass
 
     def run_autogluon_test_agent(self) -> bool:
         """Main execution loop for AutoGluon tests"""
         self.logger.info("🤖 Starting AutoGluon Test Agent...")
         
         try:
-            # Validate test files exist
             if not self.validate_test_files():
                 return False
             

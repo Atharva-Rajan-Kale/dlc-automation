@@ -1,5 +1,5 @@
-# .github/workflows/autogluon-test-agent.yml
-name: AutoGluon Test Agent
+# .github/workflows/autogluon-pr-creation.yml
+name: AutoGluon PR-Only Creation Workflow
 
 on:
   workflow_dispatch:
@@ -16,20 +16,28 @@ on:
         description: 'Your fork URL'
         required: true
         type: string
-      test_suite:
-        description: 'Test suite to run'
+      source_repo_url:
+        description: 'Source repository URL to clone from'
+        required: false
+        type: string
+        default: 'https://github.com/Atharva-Rajan-Kale/deep-learning-container.git'
+      source_branch:
+        description: 'Source branch to clone'
+        required: false
+        type: string
+        default: 'pr-testing'
+      workflow_type:
+        description: 'PR workflow type to run'
         required: true
         type: choice
         options:
-          - 'all'
-          - 'tabular'
-          - 'automm'
-          - 'timeseries'
-        default: 'all'
-      image_tag:
-        description: 'Specific image tag to test (optional - will use latest if not provided)'
+          - 'pr-only'
+        default: 'pr-only'
+      enable_testing:
+        description: 'Enable testing agents'
         required: false
-        type: string
+        type: boolean
+        default: true
 
 permissions:
   id-token: write   # Required for OIDC
@@ -46,17 +54,24 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       python-version: ${{ steps.setup.outputs.python-version }}
-      test-suite: ${{ steps.setup.outputs.test-suite }}
+      workflow-type: ${{ steps.setup.outputs.workflow-type }}
+      job-params: ${{ steps.setup.outputs.job-params }}
     steps:
       - name: Setup workflow parameters
         id: setup
         run: |
           echo "python-version=3.11" >> $GITHUB_OUTPUT
-          echo "test-suite=${{ inputs.test_suite }}" >> $GITHUB_OUTPUT
-          echo "🧪 Starting AutoGluon Test Agent"
-          echo "Version: ${{ inputs.current_version }}"
-          echo "Test Suite: ${{ inputs.test_suite }}"
-          echo "Image Tag: ${{ inputs.image_tag || 'latest' }}"
+          echo "workflow-type=${{ inputs.workflow_type }}" >> $GITHUB_OUTPUT
+          
+          # Map workflow types to job parameters (simplified for PR-only)
+          echo "job-params=--pr-only" >> $GITHUB_OUTPUT
+          
+          echo "🚀 Starting AutoGluon PR-Only Creation Workflow"
+          echo "Version: ${{ inputs.previous_version }} → ${{ inputs.current_version }}"
+          echo "Workflow: ${{ inputs.workflow_type }}"
+          echo "Source Repo: ${{ inputs.source_repo_url }}"
+          echo "Source Branch: ${{ inputs.source_branch }}"
+          echo "Fork: ${{ inputs.fork_url }}"
 
   validate-inputs:
     runs-on: ubuntu-latest
@@ -74,18 +89,30 @@ jobs:
           fi
           echo "✅ Version formats are valid"
 
-      - name: Validate fork URL
+      - name: Validate repository URLs
         run: |
           if [[ ! "${{ inputs.fork_url }}" =~ ^https://github\.com/.+/.+$ ]]; then
             echo "❌ Invalid fork URL format: ${{ inputs.fork_url }}"
             exit 1
           fi
-          echo "✅ Fork URL format is valid"
+          if [[ ! "${{ inputs.source_repo_url }}" =~ ^https://github\.com/.+/.+$ ]]; then
+            echo "❌ Invalid source repository URL format: ${{ inputs.source_repo_url }}"
+            exit 1
+          fi
+          echo "✅ Repository URL formats are valid"
 
-  test-agent:
+      - name: Validate source branch
+        run: |
+          if [[ -z "${{ inputs.source_branch }}" ]]; then
+            echo "❌ Source branch cannot be empty"
+            exit 1
+          fi
+          echo "✅ Source branch is valid: ${{ inputs.source_branch }}"
+
+  pr-creation-automation:
     runs-on: ubuntu-latest
     needs: [setup, validate-inputs]
-    timeout-minutes: 120
+    timeout-minutes: 240
     steps:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -103,37 +130,30 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.REGION }}
 
-      - name: Submit AWS Batch Job for Test Agent
+      - name: Submit AWS Batch Job for PR Creation
         id: batch-job
         run: |
-          echo "🧪 Submitting AutoGluon Test Agent to AWS Batch"
+          echo "🚀 Submitting AutoGluon PR-Only Creation to AWS Batch"
           
-          # Use the test agent script instead of the main automation
-          JOB_PARAMS="--autogluon-tests"
+          JOB_PARAMS="${{ needs.setup.outputs.job-params }}"
           
-          # Add test suite parameter
-          if [ "${{ inputs.test_suite }}" != "all" ]; then
-            JOB_PARAMS="$JOB_PARAMS --test-suite=${{ inputs.test_suite }}"
-          fi
-          
-          # Add image tag if provided
-          if [ "${{ inputs.image_tag }}" != "" ]; then
-            JOB_PARAMS="$JOB_PARAMS --image-tag=${{ inputs.image_tag }}"
-          fi
+          echo "📋 Job Parameters: $JOB_PARAMS"
+          echo "🔧 Source Repository: ${{ inputs.source_repo_url }}"
+          echo "🌿 Source Branch: ${{ inputs.source_branch }}"
           
           JOB_ID=$(aws batch submit-job \
-            --job-name "autogluon-test-agent-${{ inputs.workflow_type }}-${{ github.run_number }}" \
+            --job-name "autogluon-pr-only-${{ inputs.workflow_type }}-${{ github.run_number }}" \
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
-            --job-definition "${{ secrets.BATCH_TEST_JOB_DEFINITION }}" \
-            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=jobParams,value=$JOB_PARAMS},{name=ACCOUNT_ID,value=${{ secrets.ACCOUNT_ID }}},{name=REGION,value=us-east-1},{name=CODEBUILD_REGION,value=us-west-2},{name=BEDROCK_INFERENCE_PROFILE_ARN,value=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}}]' \
+            --job-definition "${{ secrets.BATCH_SECURITY_DEFINITION }}" \
+            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=sourceRepoUrl,value=${{ inputs.source_repo_url }}},{name=sourceBranch,value=${{ inputs.source_branch }}},{name=jobParams,value=$JOB_PARAMS},{name=ACCOUNT_ID,value=${{ secrets.ACCOUNT_ID }}},{name=REGION,value=us-east-1},{name=CODEBUILD_REGION,value=us-west-2},{name=BEDROCK_INFERENCE_PROFILE_ARN,value=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}},{name=enableTesting,value=${{ inputs.enable_testing }}}]' \
             --query 'jobId' --output text)
           
           echo "job-id=$JOB_ID" >> $GITHUB_OUTPUT
           echo "✅ Batch job submitted: $JOB_ID"
 
-      - name: Wait for Test Agent Completion
+      - name: Wait for Batch Job Completion
         run: |
-          echo "⏳ Waiting for test agent completion: ${{ steps.batch-job.outputs.job-id }}"
+          echo "⏳ Waiting for PR creation job completion: ${{ steps.batch-job.outputs.job-id }}"
           
           LOG_STREAM=""
           LAST_LOG_TIME=0
@@ -168,7 +188,7 @@ jobs:
                 --output text 2>/dev/null || echo "")
               
               if [ "$NEW_LOGS" != "" ] && [ "$NEW_LOGS" != "None" ]; then
-                echo "📋 Recent test logs:"
+                echo "📋 Recent logs:"
                 echo "$NEW_LOGS" | head -20
                 echo "---"
               fi
@@ -177,13 +197,13 @@ jobs:
             fi
             
             if [ "$JOB_STATUS" = "SUCCEEDED" ]; then
-              echo "✅ Test agent completed successfully"
+              echo "✅ PR creation job completed successfully"
               break
             elif [ "$JOB_STATUS" = "FAILED" ]; then
-              echo "❌ Test agent failed"
+              echo "❌ PR creation job failed"
               # Show final logs on failure
               if [ "$LOG_STREAM" != "" ] && [ "$LOG_STREAM" != "None" ]; then
-                echo "📋 Final test logs:"
+                echo "📋 Final logs:"
                 aws logs get-log-events \
                   --log-group-name /aws/batch/job \
                   --log-stream-name "$LOG_STREAM" \
@@ -196,51 +216,67 @@ jobs:
             sleep 30
           done
 
-      - name: Upload test results
+      - name: Upload PR creation logs
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-results-${{ inputs.test_suite }}-${{ inputs.current_version }}
+          name: pr-creation-logs-${{ inputs.workflow_type }}-${{ inputs.current_version }}
           path: |
-            test_results/
-            test_logs/
+            pr_creation_logs/
             *.log
           retention-days: 30
 
-      - name: Generate test summary
+      - name: Upload step outputs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-step-outputs-${{ inputs.workflow_type }}-${{ inputs.current_version }}
+          path: |
+            step_outputs/
+            results/
+          retention-days: 7
+
+      - name: Generate summary
         if: always()
         run: |
-          echo "## 🧪 AutoGluon Test Agent Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🤖 AutoGluon PR-Only Creation Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** ${{ inputs.current_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Test Suite:** ${{ inputs.test_suite }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Image Tag:** ${{ inputs.image_tag || 'latest' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ inputs.previous_version }} → ${{ inputs.current_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Workflow Type:** ${{ inputs.workflow_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Source Repository:** ${{ inputs.source_repo_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Source Branch:** ${{ inputs.source_branch }}" >> $GITHUB_STEP_SUMMARY
           echo "**Fork URL:** ${{ inputs.fork_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Testing Enabled:** ${{ inputs.enable_testing }}" >> $GITHUB_STEP_SUMMARY
           echo "**Region:** ${{ env.REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "**CodeBuild Region:** ${{ env.CODEBUILD_REGION }}" >> $GITHUB_STEP_SUMMARY
           echo "**Authentication:** OIDC" >> $GITHUB_STEP_SUMMARY
+          echo "**Job Parameters:** ${{ needs.setup.outputs.job-params }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [ -f "test_logs/autogluon_test_agent.log" ]; then
-            echo "**Recent Test Output:**" >> $GITHUB_STEP_SUMMARY
+          if [ -f "pr_creation_logs/enhanced_main_automation.log" ]; then
+            echo "**Recent Log Output:**" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            tail -50 test_logs/autogluon_test_agent.log >> $GITHUB_STEP_SUMMARY
+            tail -50 pr_creation_logs/enhanced_main_automation.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
   notify-completion:
     runs-on: ubuntu-latest
-    needs: [test-agent]
+    needs: [pr-creation-automation]
     if: always()
     steps:
-      - name: Notify test completion
+      - name: Notify completion
         run: |
-          if [ "${{ needs.test-agent.result }}" == "success" ]; then
-            echo "✅ AutoGluon Test Agent completed successfully!"
-            echo "Version: ${{ inputs.current_version }}"
-            echo "Test Suite: ${{ inputs.test_suite }}"
+          if [ "${{ needs.pr-creation-automation.result }}" == "success" ]; then
+            echo "✅ AutoGluon PR-Only Creation completed successfully!"
+            echo "Version: ${{ inputs.previous_version }} → ${{ inputs.current_version }}"
+            echo "Workflow: ${{ inputs.workflow_type }}"
+            echo "Source Repository: ${{ inputs.source_repo_url }}"
+            echo "Source Branch: ${{ inputs.source_branch }}"
             echo "Authentication: OIDC"
+            echo "🔗 Check your fork at: ${{ inputs.fork_url }}"
           else
-            echo "❌ AutoGluon Test Agent failed or was cancelled"
+            echo "❌ AutoGluon PR-Only Creation failed or was cancelled"
             echo "Please check the logs for details"
             exit 1
           fi
