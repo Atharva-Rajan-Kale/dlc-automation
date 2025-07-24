@@ -4,14 +4,15 @@ import sys
 import yaml
 import logging
 import subprocess
+import shutil
 import boto3
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 from datetime import datetime
 sys.path.append(str(Path(__file__).parent))
-from common import BaseAutomation, ECRImageSelector
-from github_pr_automation import GitHubPRAutomation
-from automation_logger import LoggerMixin
+from automation.common import BaseAutomation, ECRImageSelector
+from testing.github_pr_automation import GitHubPRAutomation
+from automation.automation_logger import LoggerMixin
 
 class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
     """
@@ -35,6 +36,110 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
         self.original_available_images_content = None
         self.setup_logging(current_version,custom_name="autogluon_release")
 
+    def setup_git_config(self):
+        """Setup git configuration for CI environment"""
+        try:
+            # Check if git user is already configured
+            result = self.run_subprocess_with_logging(
+                ["git", "config", "user.name"], 
+                capture_output=True, 
+                text=True, 
+                check=False
+            )
+            
+            if not result.stdout.strip():
+                self.logger.info("Setting up git configuration")
+                self.run_subprocess_with_logging([
+                    "git", "config", "user.name", "Atharva-Rajan-Kale"
+                ], check=True)
+                self.run_subprocess_with_logging([
+                    "git", "config", "user.email", "atharvakale912@gmail.com"
+                ], check=True)
+                self.logger.info("✅ Git configuration set")
+            else:
+                self.logger.info(f"Git user already configured: {result.stdout.strip()}")
+            
+            return True
+        except Exception as e:
+            self.logger.error(f"❌ Failed to setup git config: {e}")
+            return False
+
+    def setup_repository(self) -> bool:
+        """Clone repository from fork URL (master branch) and create/checkout release branch for pushing"""
+        self.logger.info("🔧 Setting up repository from fork...")
+        original_dir = os.getcwd()
+        try:
+            # Create workspace directory if it doesn't exist
+            self.workspace_dir.mkdir(exist_ok=True)
+            os.chdir(self.workspace_dir)
+            
+            # Remove existing clone if present
+            if Path("deep-learning-containers").exists():
+                self.logger.info("Removing existing repository clone...")
+                shutil.rmtree("deep-learning-containers")
+            
+            # Clone repository from fork (defaults to master branch)
+            self.logger.info(f"Cloning from {self.fork_url} (master branch)")
+            self.run_subprocess_with_logging([
+                "git", "clone", self.fork_url, "deep-learning-containers"
+            ], check=True)
+            
+            os.chdir("deep-learning-containers")
+            
+            # Setup git config
+            if not self.setup_git_config():
+                return False
+            
+            # Ensure we're on master branch and pull latest changes
+            self.logger.info("Ensuring we're on master branch and pulling latest changes...")
+            self.run_subprocess_with_logging([
+                "git", "checkout", "master"
+            ], check=True)
+            
+            self.run_subprocess_with_logging([
+                "git", "pull", "origin", "master"
+            ], check=True)
+            self.logger.info("✅ Master branch is up to date")
+            
+            # Create and checkout the release branch from current master
+            branch_name = f"autogluon-{self.current_version}-release"
+            self.logger.info(f"Creating release branch '{branch_name}' from master for pushing changes...")
+            
+            try:
+                # Check if branch already exists locally and delete it
+                result = self.run_subprocess_with_logging([
+                    "git", "branch", "--list", branch_name
+                ], capture_output=True, text=True, check=False)
+                
+                if result.stdout.strip():
+                    self.logger.info(f"Deleting existing local branch: {branch_name}")
+                    self.run_subprocess_with_logging([
+                        "git", "branch", "-D", branch_name
+                    ], check=True)
+                
+                # Create new branch from current master
+                self.run_subprocess_with_logging([
+                    "git", "checkout", "-b", branch_name
+                ], check=True)
+                self.logger.info(f"✅ Created and checked out release branch: {branch_name}")
+                self.logger.info(f"📋 This branch will be used for committing and pushing changes")
+                
+            except subprocess.CalledProcessError as e:
+                self.logger.error(f"❌ Failed to create release branch: {e}")
+                return False
+            
+            # Update repo_dir to point to the cloned repository
+            self.repo_dir = Path.cwd()
+            self.logger.info(f"✅ Repository setup complete: {self.repo_dir}")
+            self.logger.info(f"📋 Workflow: Cloned from master → Working on {branch_name} → Will push to {branch_name}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Repository setup failed: {e}")
+            return False
+        finally:
+            os.chdir(original_dir)
+
     def prompt_user(self, question: str) -> bool:
         """Prompt user with a yes/no question and repeat until valid answer"""
         while True:
@@ -55,7 +160,188 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
                 break
             else:
                 print("⏳ Waiting for CR process completion...")
+
+    # ... (keeping all other existing methods unchanged for brevity) ...
+
+    def run_yaml_only_automation(self):
+        """Run only YAML file updates and PR creation"""
+        try:
+            print("🚀 Starting AutoGluon YAML-Only Release Automation...")
+            
+            # Step 0: Setup repository from fork
+            print("🔧 Setting up repository from fork...")
+            if not self.setup_repository():
+                raise Exception("Failed to setup repository from fork")
+            
+            # Step 1: Wait for CR completion
+            self.wait_for_cr_completion()
+            
+            # Step 2: Extract image information
+            print("🔍 Extracting image information for YAML files...")
+            print(f"📋 Using environment ACCOUNT_ID for beta repositories")
+            image_info = self.get_latest_training_gpu_image()
+            if not image_info:
+                raise Exception("Failed to get training image information")
                 
+            print(f"📦 Image info extracted from {image_info['tag']}:")
+            print(f"   OS Version: {image_info['os_version']}")
+            print(f"   Python Versions: {image_info['python_versions']}")
+            print(f"   CUDA Version: {image_info['cuda_version']}")
+            
+            # Step 3: Backup and update YAML files
+            self.backup_yaml_files()
+            print("📝 Updating release_images files...")
+            if not self.update_release_images_files(image_info):
+                raise Exception("Failed to update release_images files")
+                
+            print("✅ Release images files updated successfully")
+            
+            # Step 4: Commit and create PR
+            if not self.prompt_user("Commit and create PR with YAML changes?"):
+                print("❌ Operation cancelled by user")
+                return False
+                
+            commit_message = f"AutoGluon {self.current_version}: Add release images configuration"
+            if not self.commit_and_push_yaml_changes(commit_message):
+                raise Exception("Failed to commit and push YAML changes")
+                
+            print("🚀 Creating Pull Request for YAML changes...")
+            if not self.pr_automation.create_pull_request():
+                raise Exception("Failed to create Pull Request")
+                
+            print("✅ YAML-Only AutoGluon Release Automation completed successfully!")
+            print("📋 Summary:")
+            print("   - Repository: Cloned from master and release branch created")
+            print("   - YAML files: Updated and committed")
+            print("   - PR created successfully")
+            print("   - Ready for review and merge")
+            print("\n🔄 Next steps:")
+            print("   1. Review and merge the YAML PR")
+            print("   2. Run the script again WITHOUT --yaml-only flag for the second part")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ YAML-only automation failed: {e}")
+            print(f"❌ Error: {e}")
+            return False
+
+    def run_revert_and_available_images_automation(self):
+        """Run revert YAML + update available_images.md + create single combined PR"""
+        try:
+            print("🚀 Starting AutoGluon Revert and Available Images Automation...")
+            
+            # Step 0: Setup repository from fork
+            print("🔧 Setting up repository from fork...")
+            if not self.setup_repository():
+                raise Exception("Failed to setup repository from fork")
+            
+            # Step 1: Extract image information (needed for constructing URLs)
+            print("🔍 Extracting image information for available_images.md...")
+            image_info = self.get_latest_training_gpu_image()
+            if not image_info:
+                raise Exception("Failed to get training image information")
+                
+            print(f"📦 Using image info from {image_info['tag']} for URL construction")
+            
+            # Step 2: Backup files
+            self.backup_yaml_files()
+            self.backup_available_images_file()
+            
+            # Step 3: Revert YAML files
+            print("🔄 Reverting YAML changes...")
+            if not self.revert_yaml_files():
+                raise Exception("Failed to revert YAML files")
+            print("✅ YAML files reverted successfully")
+            
+            # Step 4: Construct image URLs and update available_images.md
+            print("📝 Starting available_images.md update process...")
+            print("🔧 Constructing image URLs using specified pattern...")
+            print(f"📋 Using production account ID: {self.PRODUCTION_ACCOUNT_ID}")
+            print(f"📋 Using region: {os.environ.get('REGION', self.DEFAULT_REGION)}")
+            
+            # Construct URLs using the pattern instead of fetching from repositories
+            constructed_images = self.construct_image_urls_by_type(image_info)
+            training_images = constructed_images['training']
+            inference_images = constructed_images['inference']
+            
+            if not training_images or not inference_images:
+                raise Exception("Failed to construct sufficient image URLs")
+                
+            print(f"📦 Constructed training images: {list(training_images.keys()) if isinstance(training_images, dict) else type(training_images)}")
+            print(f"📦 Constructed inference images: {list(inference_images.keys()) if isinstance(inference_images, dict) else type(inference_images)}")
+            
+            for img_type, img_data in training_images.items():
+                self.logger.info(f"📦 Training {img_type} constructed URL: {img_data.get('image_uri', 'N/A')}")
+            for img_type, img_data in inference_images.items():
+                self.logger.info(f"📦 Inference {img_type} constructed URL: {img_data.get('image_uri', 'N/A')}")
+            
+            print("📝 Updating available_images.md with constructed image URLs...")
+            if not self.update_available_images_md(training_images, inference_images):
+                raise Exception("Failed to update available_images.md")
+            print("✅ available_images.md updated successfully with constructed image URLs")
+            
+            # Step 5: Commit both changes (revert + available_images.md update) in single commit
+            if not self.prompt_user("Commit and create PR with both YAML revert and available_images.md changes?"):
+                print("❌ Operation cancelled by user")
+                return False
+                
+            combined_commit_message = f"AutoGluon {self.current_version}: Revert release images config and update available images documentation"
+            if not self.commit_and_push_combined_changes(combined_commit_message):
+                raise Exception("Failed to commit and push combined changes")
+                
+            print("🚀 Creating Pull Request for combined changes...")
+            if not self.pr_automation.create_pull_request():
+                raise Exception("Failed to create Pull Request")
+                
+            print("✅ Revert and Available Images Automation completed successfully!")
+            print("📋 Summary:")
+            print("   - Repository: Cloned from master and release branch created")
+            print("   - YAML files: Reverted to original state")
+            print("   - available_images.md: Updated with constructed image URLs")
+            print("   - Single PR created with both changes")
+            print("   - Ready for review and merge")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Revert and available images automation failed: {e}")
+            print(f"❌ Error: {e}")
+            return False
+
+    def commit_and_push_combined_changes(self, commit_message: str):
+        """Commit and push both YAML revert and available_images.md changes in single commit"""
+        try:
+            original_dir = os.getcwd()
+            os.chdir(self.repo_dir)
+            
+            # Add both YAML files and available_images.md
+            self.run_subprocess_with_logging(['git', 'add', 'release_images_training.yml', 'release_images_inference.yml', 'available_images.md'], check=True)
+            
+            # Commit both changes together
+            self.run_subprocess_with_logging(['git', 'commit', '-m', commit_message], check=True)
+            
+            # Push changes
+            branch_name = f"autogluon-{self.current_version}-release"
+            self.run_subprocess_with_logging(['git', 'push', 'origin', branch_name], check=True)
+            self.logger.info(f"✅ Combined changes committed and pushed: {commit_message}")
+            return True
+        except Exception as e:
+            self.logger.error(f"❌ Failed to commit and push combined changes: {e}")
+            return False
+        finally:
+            os.chdir(original_dir)
+
+    def run_release_images_automation(self, yaml_only: bool = False):
+        """Main automation workflow dispatcher"""
+        if yaml_only:
+            return self.run_yaml_only_automation()
+        else:
+            return self.run_revert_and_available_images_automation()
+
+    # Add all the other existing methods here (get_latest_autogluon_images_by_type, construct_image_urls_by_type, etc.)
+    # ... (keeping all other methods from the original code) ...
+
     def get_latest_autogluon_images_by_type(self, repo_name: str, account_id: str = None) -> Dict[str, Dict]:
         """Get the latest GPU and CPU images from autogluon repository"""
         if account_id is None:
@@ -263,42 +549,51 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
         """Move current AutoGluon sections to Prior sections for major version updates"""
         lines = content.split('\n')
         new_lines = []
-        training_section = self.extract_section(lines, "AutoGluon Training Containers")
-        inference_section = self.extract_section(lines, "AutoGluon Inference Containers")
+        
+        self.logger.info("🔄 Moving current AutoGluon sections to Prior sections")
+        
+        # Extract current training section
+        current_training_section = self.extract_current_section(lines, "AutoGluon Training Containers")
+        current_inference_section = self.extract_current_section(lines, "AutoGluon Inference Containers")
+        
+        self.logger.info(f"📋 Extracted training section: {len(current_training_section)} lines")
+        self.logger.info(f"📋 Extracted inference section: {len(current_inference_section)} lines")
+        
         i = 0
         while i < len(lines):
             line = lines[i]
-            if "AutoGluon Training Containers" in line:
-                new_lines.append(line)
-                i += 1
-                while i < len(lines) and not lines[i].startswith("AutoGluon Inference Containers"):
-                    if not lines[i].startswith("AutoGluon Training Containers"):
-                        new_lines.append(lines[i])
-                    i += 1
-                continue
-            elif "AutoGluon Inference Containers" in line:
-                new_lines.append(line)
-                i += 1
-                while i < len(lines) and not (lines[i].startswith("Prior AutoGluon") or lines[i].startswith("(--------")):
-                    if not lines[i].startswith("AutoGluon Inference Containers"):
-                        new_lines.append(lines[i])
-                    i += 1
-                continue
-            elif "Prior AutoGluon Training Containers" in line:
-                if training_section:
-                    new_lines.extend(training_section)
+            if "Prior AutoGluon Training Containers" in line:
+                self.logger.info("📝 Found Prior AutoGluon Training Containers section")
+                if current_training_section:
+                    new_lines.extend(current_training_section)
+                    new_lines.append("") 
                 new_lines.append(line)
                 i += 1
                 continue
             elif "Prior AutoGluon Inference Containers" in line:
-                if inference_section:
-                    new_lines.extend(inference_section)
+                self.logger.info("📝 Found Prior AutoGluon Inference Containers section")
+                if current_inference_section:
+                    new_lines.extend(current_inference_section)
+                    new_lines.append("") 
                 new_lines.append(line)
                 i += 1
                 continue
+            elif i == len(lines) - 1:
+                new_lines.append(line)
+                if current_training_section:
+                    new_lines.append("")
+                    new_lines.extend(current_training_section)
+                if current_inference_section:
+                    new_lines.append("")
+                    new_lines.extend(current_inference_section)
+                i += 1
+                continue
+                
             else:
                 new_lines.append(line)
                 i += 1
+        
+        self.logger.info("✅ Current sections moved to Prior sections")
         return '\n'.join(new_lines)
     
     def extract_section(self, lines: list[str], section_name: str) -> list[str]:
@@ -439,57 +734,6 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
         self.logger.info(f"📋 Creating {job_type} {compute_type} row with actual URI: {actual_uri}")
         
         return f"| AutoGluon {self.current_version} | {self.current_version}              | {job_type} | {compute_type}     | {python_version} ({image_info['python_versions'][0]})             | {actual_uri} |"
-    
-    def move_current_to_prior(self, content: str) -> str:
-        """Move current AutoGluon sections to Prior sections for major version updates"""
-        lines = content.split('\n')
-        new_lines = []
-        
-        self.logger.info("🔄 Moving current AutoGluon sections to Prior sections")
-        
-        # Extract current training section
-        current_training_section = self.extract_current_section(lines, "AutoGluon Training Containers")
-        current_inference_section = self.extract_current_section(lines, "AutoGluon Inference Containers")
-        
-        self.logger.info(f"📋 Extracted training section: {len(current_training_section)} lines")
-        self.logger.info(f"📋 Extracted inference section: {len(current_inference_section)} lines")
-        
-        i = 0
-        while i < len(lines):
-            line = lines[i]
-            if "Prior AutoGluon Training Containers" in line:
-                self.logger.info("📝 Found Prior AutoGluon Training Containers section")
-                if current_training_section:
-                    new_lines.extend(current_training_section)
-                    new_lines.append("") 
-                new_lines.append(line)
-                i += 1
-                continue
-            elif "Prior AutoGluon Inference Containers" in line:
-                self.logger.info("📝 Found Prior AutoGluon Inference Containers section")
-                if current_inference_section:
-                    new_lines.extend(current_inference_section)
-                    new_lines.append("") 
-                new_lines.append(line)
-                i += 1
-                continue
-            elif i == len(lines) - 1:
-                new_lines.append(line)
-                if current_training_section:
-                    new_lines.append("")
-                    new_lines.extend(current_training_section)
-                if current_inference_section:
-                    new_lines.append("")
-                    new_lines.extend(current_inference_section)
-                i += 1
-                continue
-                
-            else:
-                new_lines.append(line)
-                i += 1
-        
-        self.logger.info("✅ Current sections moved to Prior sections")
-        return '\n'.join(new_lines)
     
     def extract_current_section(self, lines: list[str], section_name: str) -> list[str]:
         """Extract a current AutoGluon section from the markdown"""
@@ -705,93 +949,6 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
                 break
             else:
                 print(f"⏳ Waiting for {pr_type} PR merge...")
-                
-    def run_release_images_automation(self):
-        """Main automation workflow"""
-        try:
-            print("🚀 Starting AutoGluon Release Images Automation...")
-            self.wait_for_cr_completion()
-            print("🔍 Extracting image information for YAML files...")
-            print(f"📋 Using environment ACCOUNT_ID for beta repositories")
-            image_info = self.get_latest_training_gpu_image()
-            if not image_info:
-                raise Exception("Failed to get training image information")
-            print(f"📦 Image info extracted from {image_info['tag']}:")
-            print(f"   OS Version: {image_info['os_version']}")
-            print(f"   Python Versions: {image_info['python_versions']}")
-            print(f"   CUDA Version: {image_info['cuda_version']}")
-            self.backup_yaml_files()
-            print("📝 Updating release_images files...")
-            if not self.update_release_images_files(image_info):
-                raise Exception("Failed to update release_images files")
-                
-            print("✅ Release images files updated successfully")
-            if not self.prompt_user("Commit and create PR with YAML changes?"):
-                print("❌ Operation cancelled by user")
-                return False
-            commit_message = f"AutoGluon {self.current_version}: Add release images configuration"
-            if not self.commit_and_push_yaml_changes(commit_message):
-                raise Exception("Failed to commit and push YAML changes")
-            print("🚀 Creating Pull Request for YAML changes...")
-            if not self.pr_automation.create_pull_request():
-                raise Exception("Failed to create Pull Request")
-            self.wait_for_pr_merge("YAML")
-            print("🔄 Reverting YAML changes...")
-            if not self.revert_yaml_files():
-                raise Exception("Failed to revert YAML files")
-            revert_commit_message = f"AutoGluon {self.current_version}: Revert release images configuration"
-            if not self.commit_and_push_yaml_changes(revert_commit_message):
-                raise Exception("Failed to commit and push YAML revert")
-            print("🚀 Creating Revert Pull Request for YAML changes...")
-            if not self.pr_automation.create_pull_request():
-                raise Exception("Failed to create Revert Pull Request")
-            self.wait_for_pr_merge("YAML revert")
-            
-            # Updated section: construct URLs instead of fetching from production
-            print("📝 Starting available_images.md update process...")
-            print("🔧 Constructing image URLs using specified pattern...")
-            print(f"📋 Using production account ID: {self.PRODUCTION_ACCOUNT_ID}")
-            print(f"📋 Using region: {os.environ.get('REGION', self.DEFAULT_REGION)}")
-            
-            # Construct URLs using the pattern instead of fetching from repositories
-            constructed_images = self.construct_image_urls_by_type(image_info)
-            training_images = constructed_images['training']
-            inference_images = constructed_images['inference']
-            
-            if not training_images or not inference_images:
-                raise Exception("Failed to construct sufficient image URLs")
-            print(f"📦 Constructed training images: {list(training_images.keys()) if isinstance(training_images, dict) else type(training_images)}")
-            print(f"📦 Constructed inference images: {list(inference_images.keys()) if isinstance(inference_images, dict) else type(inference_images)}")
-            for img_type, img_data in training_images.items():
-                self.logger.info(f"📦 Training {img_type} constructed URL: {img_data.get('image_uri', 'N/A')}")
-            for img_type, img_data in inference_images.items():
-                self.logger.info(f"📦 Inference {img_type} constructed URL: {img_data.get('image_uri', 'N/A')}")
-            
-            self.backup_available_images_file()
-            print("📝 Updating available_images.md with constructed image URLs...")
-            if not self.update_available_images_md(training_images, inference_images):
-                raise Exception("Failed to update available_images.md")
-            print("✅ available_images.md updated successfully with constructed image URLs")
-            if not self.prompt_user("Commit and create PR with available_images.md changes?"):
-                print("❌ Operation cancelled by user")
-                return False
-            available_images_commit_message = f"AutoGluon {self.current_version}: Update available images documentation with constructed URLs"
-            if not self.commit_and_push_available_images_changes(available_images_commit_message):
-                raise Exception("Failed to commit and push available_images.md changes")
-            print("🚀 Creating Pull Request for available_images.md...")
-            if not self.pr_automation.create_pull_request():
-                raise Exception("Failed to create available_images.md Pull Request")                
-            self.wait_for_pr_merge("available_images.md")
-            print("✅ AutoGluon Release Images Automation completed successfully!")
-            print("📋 Summary:")
-            print("   - YAML files: Updated and reverted (temporary)")
-            print("   - available_images.md: Updated permanently with constructed image URLs")
-            print("   - Total PRs created: 3")
-            return True
-        except Exception as e:
-            self.logger.error(f"❌ Automation failed: {e}")
-            print(f"❌ Error: {e}")
-            return False
 
 def main():
     """Main function for AutoGluon Release Images Automation"""
@@ -799,16 +956,25 @@ def main():
     parser = argparse.ArgumentParser(description='AutoGluon Release Images Automation - Updates YAML files and available_images.md')
     parser.add_argument('--current-version', required=True, help='Current version (e.g., 1.3.2)')
     parser.add_argument('--previous-version', required=True, help='Previous version (e.g., 1.3.1)')
-    parser.add_argument('--fork-url', required=True, help='Your fork URL') 
+    parser.add_argument('--fork-url', required=True, help='Your fork URL')
+    parser.add_argument('--yaml-only', action='store_true', help='Run only YAML file updates and PR creation (first step). Without this flag, runs revert + available_images.md update (second step).')
+    
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    print("🚀 AutoGluon Release Images Automation")
+    
+    if args.yaml_only:
+        print("🚀 AutoGluon YAML-Only Release Automation")
+        print("📋 This will update YAML files and create PR")
+    else:
+        print("🚀 AutoGluon Revert + Available Images Automation") 
+        print("📋 This will revert YAML files, update available_images.md, and create combined PR")
+        
     automation = AutoGluonReleaseImagesAutomation(
         args.current_version,
         args.previous_version,
         args.fork_url
     )
-    success = automation.run_release_images_automation()
+    success = automation.run_release_images_automation(yaml_only=args.yaml_only)
     exit(0 if success else 1)
 
 if __name__ == "__main__":

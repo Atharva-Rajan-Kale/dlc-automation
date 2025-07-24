@@ -57,7 +57,6 @@ jobs:
       - name: Setup workflow parameters
         id: setup
         run: |
-          echo "python-version=3.11" >> $GITHUB_OUTPUT
           echo "workflow-type=${{ inputs.workflow_type }}" >> $GITHUB_OUTPUT
           echo "🚀 Starting AutoGluon Release Automation"
           echo "Version: ${{ inputs.previous_version }} → ${{ inputs.current_version }}"
@@ -90,12 +89,12 @@ jobs:
   main-automation:
     runs-on: ubuntu-latest
     needs: [setup, validate-inputs]
-    timeout-minutes: 180
     steps:
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::${{ secrets.ACCOUNT_ID }}:role/dlc-automation-oidc-role
+          role-duration-seconds: 43200
           aws-region: ${{ env.REGION }}
           
       # Fallback to access keys if OIDC fails
@@ -130,7 +129,11 @@ jobs:
             --job-name "autogluon-release-${{ inputs.workflow_type }}-${{ github.run_number }}" \
             --job-queue "${{ secrets.BATCH_JOB_QUEUE }}" \
             --job-definition "${{ secrets.BATCH_JOB_DEFINITION }}" \
-            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},{name=jobParams,value=$JOB_PARAMS},{name=ACCOUNT_ID,value=${{ secrets.ACCOUNT_ID }}},{name=REGION,value=us-east-1},{name=CODEBUILD_REGION,value=us-west-2},{name=BEDROCK_INFERENCE_PROFILE_ARN,value=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}}]' \
+            --container-overrides 'environment=[{name=GITHUB_TOKEN,value=${{ secrets.TOKEN }}},{name=currentVersion,value=${{ inputs.current_version }}},{name=previousVersion,value=${{ inputs.previous_version }}},{name=forkUrl,value=${{ inputs.fork_url }}},
+            {name=jobParams,value=$JOB_PARAMS},{name=ACCOUNT_ID,value=${{ secrets.ACCOUNT_ID }}},{name=REGION,value=us-east-1},{name=CODEBUILD_REGION,value=us-west-2},
+            {name=BEDROCK_INFERENCE_PROFILE_ARN,value=${{ secrets.BEDROCK_INFERENCE_PROFILE_ARN }}},
+            {name=CODEBUILD_AWS_ACCESS_KEY_ID,value=${{ secrets.CODEBUILD_AWS_ACCESS_KEY_ID }}},{name=CODEBUILD_AWS_SECRET_ACCESS_KEY,value=${{ secrets.CODEBUILD_AWS_SECRET_ACCESS_KEY }}},
+            {name=CODEBUILD_AWS_SESSION_TOKEN,value=${{ secrets.CODEBUILD_AWS_SESSION_TOKEN }}}]' \
             --query 'jobId' --output text)
           
           echo "job-id=$JOB_ID" >> $GITHUB_OUTPUT

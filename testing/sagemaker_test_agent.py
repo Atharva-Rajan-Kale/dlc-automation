@@ -13,8 +13,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 
-from common import BaseAutomation, ECRImageSelector
-from automation_logger import LoggerMixin
+from automation.common import BaseAutomation, ECRImageSelector
+from automation.automation_logger import LoggerMixin
 @dataclass
 class TestError:
     error_type:str
@@ -93,6 +93,7 @@ class SageMakerTestAgent(BaseAutomation,LoggerMixin):
 
             Container:{container_type}, Tag:{image_tag}, Framework:{framework_version}
             Test Directory:{test_directory}
+            Test Type:{test_type}
 
             Errors:
             {test_output}
@@ -104,7 +105,7 @@ class SageMakerTestAgent(BaseAutomation,LoggerMixin):
         self.chain=self.analysis_prompt | self.llm | self.parser
 
     def get_latest_ecr_images(self) -> Dict[str, List[str]]:
-        """Get latest 1 CPU image from beta-autogluon repositories"""
+        """Get latest CPU and GPU images from beta-autogluon repositories"""
         account_id=os.environ.get('ACCOUNT_ID')
         region=os.environ.get('REGION', 'us-east-1')
         if not account_id:
@@ -112,23 +113,37 @@ class SageMakerTestAgent(BaseAutomation,LoggerMixin):
         ecr_client=boto3.client('ecr', region_name=region)
         repositories=['beta-autogluon-training', 'beta-autogluon-inference']
         latest_images={}
+        
         for repo in repositories:
             try:
-                response=ecr_client.describe_images(repositoryName=repo, maxResults=50)
+                response=ecr_client.describe_images(repositoryName=repo, maxResults=100)
                 images=sorted(response['imageDetails'], key=lambda x:x['imagePushedAt'], reverse=True)
+                
+                latest_images[repo] = []
+                cpu_found = False
+                gpu_found = False
                 for image in images:
                     if 'imageTags' in image:
-                        tag=image['imageTags'][0]
-                        if '-cpu-' in tag:
-                            image_uri=f"{account_id}.dkr.ecr.{region}.amazonaws.com/{repo}:{tag}"
-                            latest_images[repo]=[image_uri]
-                            self.logger.info(f"📦 {repo}:{tag}")
+                        tag = image['imageTags'][0]
+                        image_uri = f"{account_id}.dkr.ecr.{region}.amazonaws.com/{repo}:{tag}"
+                        # Get latest CPU image
+                        if '-cpu-' in tag and not cpu_found:
+                            latest_images[repo].append(image_uri)
+                            cpu_found = True
+                            self.logger.info(f"📦 {repo} CPU: {tag}")
+                        # Get latest GPU image
+                        elif '-gpu-' in tag and not gpu_found:
+                            latest_images[repo].append(image_uri)
+                            gpu_found = True
+                            self.logger.info(f"📦 {repo} GPU: {tag}")
+                        # Break if we found both CPU and GPU images
+                        if cpu_found and gpu_found:
                             break
-                else:
-                    latest_images[repo]=[]
+                if not latest_images[repo]:
+                    self.logger.warning(f"⚠️ No CPU or GPU images found in {repo}")
             except Exception as e:
-                self.logger.error(f"❌ Failed to get images from {repo}:{e}")
-                latest_images[repo]=[]
+                self.logger.error(f"❌ Failed to get images from {repo}: {e}")
+                latest_images[repo] = []
         return latest_images
 
     def setup_iam_permissions(self) -> bool:
@@ -204,16 +219,17 @@ class SageMakerTestAgent(BaseAutomation,LoggerMixin):
             self.logger.error(f"❌ Setup failed:{e}")
             return False
 
-    def run_sagemaker_test(self, image_uri:str, container_type:str) -> Tuple[bool, str]:
-        """Run SageMaker test for a specific image"""
-        tag=image_uri.split(':')[-1]
-        processor='cpu' if '-cpu-' in tag else 'gpu'
-        py_match=re.search(r'-py(\d+)-', tag)
-        python_version=py_match.group(1) if py_match else '3'
-        account_id=os.environ.get('ACCOUNT_ID')
-        region=os.environ.get('REGION', 'us-east-1')
-        cmd=[
-            "python3", "-m", "pytest", "-v", "integration/local",
+    def run_single_test_suite(self, image_uri: str, container_type: str, test_type: str) -> Tuple[bool, str]:
+        """Run a single test suite (local or sagemaker) for a specific image"""
+        tag = image_uri.split(':')[-1]
+        processor = 'cpu' if '-cpu-' in tag else 'gpu'
+        py_match = re.search(r'-py(\d+)-', tag)
+        python_version = py_match.group(1) if py_match else '3'
+        account_id = os.environ.get('ACCOUNT_ID')
+        region = os.environ.get('REGION', 'us-east-1')        
+        # sagemaker-local test
+        base_cmd = [
+            "python3", "-m", "pytest", "-v", f"integration/{test_type}",
             "--region", region,
             "--docker-base-name", f"{account_id}.dkr.ecr.{region}.amazonaws.com/beta-autogluon-{container_type}",
             "--tag", tag,
@@ -221,16 +237,55 @@ class SageMakerTestAgent(BaseAutomation,LoggerMixin):
             "--processor", processor,
             "--py-version", python_version
         ]
+        # sagemaker test (Remote tests)
+        if test_type == "sagemaker":
+            instance_type = "ml.p3.2xlarge" if processor == "gpu" else "ml.c5.xlarge"
+            base_cmd.extend([
+                "--aws-id", account_id,
+                "--instance-type", instance_type,
+                "--sagemaker-regions", region
+            ])
         try:
-            result=self.run_subprocess_with_logging(cmd, capture_output=True, text=True, timeout=1800)
-            success=result.returncode == 0
-            output=result.stdout + result.stderr
-            self.logger.info(f"📊 Test {'PASSED' if success else 'FAILED'}:{image_uri.split('/')[-1]}")
+            result = self.run_subprocess_with_logging(base_cmd, capture_output=True, text=True, timeout=1800)
+            success = result.returncode == 0
+            output = result.stdout + result.stderr
+            test_status = 'PASSED' if success else 'FAILED'
+            self.logger.info(f"📊 {test_type.upper()} Test {test_status} ({processor.upper()}): {image_uri.split('/')[-1]}")
             return success, output
         except subprocess.TimeoutExpired:
-            return False, "Test execution timed out after 30 minutes"
+            return False, f"{test_type.upper()} test execution timed out after 30 minutes"
         except Exception as e:
-            return False, f"Test execution error:{str(e)}"
+            return False, f"{test_type.upper()} test execution error: {str(e)}"
+
+    def run_sagemaker_test(self, image_uri: str, container_type: str) -> Tuple[bool, str]:
+        """Run tests for a specific image based on container type"""
+        all_outputs = []
+        all_success = True
+        tag = image_uri.split(':')[-1]
+        processor = "CPU" if '-cpu-' in tag else "GPU"
+        
+        # Determine which test types to run based on container type
+        if container_type == "training":
+            # Training images: only run sagemaker tests
+            test_types = ["sagemaker"]
+        else:
+            # Inference images: run both local and sagemaker tests
+            test_types = ["local", "sagemaker"]
+        
+        for test_type in test_types:
+            self.logger.info(f"🎯 Running {test_type.upper()} tests ({processor}): {tag}")
+            success, output = self.run_single_test_suite(image_uri, container_type, test_type)
+            
+            all_outputs.append(f"\n--- {test_type.upper()} TEST RESULTS ({processor}) ---\n{output}")
+            
+            if not success:
+                all_success = False
+                self.logger.error(f"❌ {test_type.upper()} tests failed ({processor}): {tag}")
+            else:
+                self.logger.info(f"✅ {test_type.upper()} tests passed ({processor}): {tag}")
+        
+        combined_output = "\n".join(all_outputs)
+        return all_success, combined_output
 
     def filter_errors_only(self, test_output:str) -> str:
         """Filter test output to contain only errors, removing warnings"""
@@ -292,7 +347,10 @@ class SageMakerTestAgent(BaseAutomation,LoggerMixin):
                     overall_success=False
                     continue
                 for image_uri in images:
-                    self.logger.info(f"🎯 Testing:{image_uri.split('/')[-1]}")
+                    tag = image_uri.split(':')[-1]
+                    processor = "CPU" if '-cpu-' in tag else "GPU"
+                    test_info = "SageMaker only" if container_type == "training" else "Local + SageMaker"
+                    self.logger.info(f"🎯 Testing {processor} {container_type} ({test_info}): {tag}")
                     max_retries=3
                     test_passed=False
                     for retry in range(max_retries):
@@ -307,12 +365,15 @@ class SageMakerTestAgent(BaseAutomation,LoggerMixin):
                         self.logger.info(f"❌ Found errors (attempt {retry + 1}/{max_retries})")
                         try:
                             tag_info={"tag":image_uri.split(':')[-1]}
+                            # Determine test type description for Claude
+                            test_type_desc = "sagemaker" if container_type == "training" else "local and sagemaker"
                             fix_plan=self.chain.invoke({
                                 "container_type":container_type,
                                 "image_tag":tag_info['tag'],
                                 "framework_version":self.current_version,
                                 "test_output":error_output,
-                                "test_directory":os.getcwd()
+                                "test_directory":os.getcwd(),
+                                "test_type":test_type_desc
                             })
                             if self.apply_fixes(fix_plan, os.getcwd()):
                                 self.logger.info(f"✅ Applied Claude's fixes, retrying...")
@@ -342,11 +403,28 @@ class SageMakerTestAgent(BaseAutomation,LoggerMixin):
         print("="*70)
         passed=[uri for uri, passed in self.test_results.items() if passed]
         failed=[uri for uri, passed in self.test_results.items() if not passed]
-        print(f"📊 Total:{len(self.test_results)} | ✅ Passed:{len(passed)} | ❌ Failed:{len(failed)}")
+        
+        # Separate by container type and processor
+        training_cpu_passed = [uri for uri in passed if 'training' in uri and '-cpu-' in uri]
+        training_gpu_passed = [uri for uri in passed if 'training' in uri and '-gpu-' in uri]
+        inference_cpu_passed = [uri for uri in passed if 'inference' in uri and '-cpu-' in uri]
+        inference_gpu_passed = [uri for uri in passed if 'inference' in uri and '-gpu-' in uri]
+        
+        training_cpu_failed = [uri for uri in failed if 'training' in uri and '-cpu-' in uri]
+        training_gpu_failed = [uri for uri in failed if 'training' in uri and '-gpu-' in uri]
+        inference_cpu_failed = [uri for uri in failed if 'inference' in uri and '-cpu-' in uri]
+        inference_gpu_failed = [uri for uri in failed if 'inference' in uri and '-gpu-' in uri]
+        
+        print(f"📊 Total: {len(self.test_results)} | ✅ Passed: {len(passed)} | ❌ Failed: {len(failed)}")
+        print(f"   🏋️  Training - CPU: {len(training_cpu_passed)}✅/{len(training_cpu_failed)}❌ | GPU: {len(training_gpu_passed)}✅/{len(training_gpu_failed)}❌")
+        print(f"   🔍 Inference - CPU: {len(inference_cpu_passed)}✅/{len(inference_cpu_failed)}❌ | GPU: {len(inference_gpu_passed)}✅/{len(inference_gpu_failed)}❌")
+        
         if failed:
             print("\n❌ Failed tests:")
             for uri in failed:
-                print(f"   - {uri.split('/')[-1]}")
+                processor = "CPU" if '-cpu-' in uri else "GPU"
+                container = "Training" if 'training' in uri else "Inference"
+                print(f"   - [{container} {processor}] {uri.split('/')[-1]}")
         print("="*70)
 
 def main():

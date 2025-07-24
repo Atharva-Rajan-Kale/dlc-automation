@@ -3,8 +3,8 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from common import BaseAutomation
-from automation_logger import LoggerMixin
+from automation.common import BaseAutomation
+from automation.automation_logger import LoggerMixin
 
 class Steps125Automation(BaseAutomation, LoggerMixin):
     """Handles Steps 1, 2, and 5: Branch creation, TOML update, and Package model"""
@@ -23,19 +23,17 @@ class Steps125Automation(BaseAutomation, LoggerMixin):
                 text=True, 
                 check=False
             )
-            
             if not result.stdout.strip():
                 self.logger.info("Setting up git configuration for CI")
                 self.run_subprocess_with_logging([
-                    "git", "config", "user.name", "AutoGluon Release Automation"
+                    "git", "config", "user.name", "Atharva-Rajan-Kale"
                 ], check=True)
                 self.run_subprocess_with_logging([
-                    "git", "config", "user.email", "automation@github.com"
+                    "git", "config", "user.email", "atharvakale912@gmail.com"
                 ], check=True)
                 self.logger.info("✅ Git configuration set")
             else:
                 self.logger.info(f"Git user already configured: {result.stdout.strip()}")
-            
             return True
         except Exception as e:
             self.logger.error(f"❌ Failed to setup git config: {e}")
@@ -51,7 +49,6 @@ class Steps125Automation(BaseAutomation, LoggerMixin):
                 check=False
             )
             has_unstaged = result.returncode != 0
-            
             # Check for staged changes
             result = self.run_subprocess_with_logging(
                 ["git", "diff", "--cached", "--quiet"], 
@@ -59,7 +56,6 @@ class Steps125Automation(BaseAutomation, LoggerMixin):
                 check=False
             )
             has_staged = result.returncode != 0
-            
             return has_unstaged or has_staged
         except Exception as e:
             self.logger.error(f"Error checking git changes: {e}")
@@ -75,16 +71,12 @@ class Steps125Automation(BaseAutomation, LoggerMixin):
             if not Path("deep-learning-containers").exists():
                 self.logger.info(f"Cloning from {self.fork_url}")
                 self.run_subprocess_with_logging(["git", "clone", self.fork_url, "deep-learning-containers"], check=True)
-            
             os.chdir("deep-learning-containers")
-            
             # Setup git config early
             if not self.setup_git_config():
                 return False
-            
             result = self.run_subprocess_with_logging(["git", "remote", "get-url", "origin"], capture_output=True, text=True)
             self.logger.info(f"Working in repository: {result.stdout.strip()}")
-            
             try:
                 self.run_subprocess_with_logging(["git", "remote", "get-url", "upstream"], capture_output=True, check=True)
                 self.logger.info("Upstream remote already exists")
@@ -92,7 +84,6 @@ class Steps125Automation(BaseAutomation, LoggerMixin):
                 self.logger.info("Adding upstream remote")
                 self.run_subprocess_with_logging(["git", "remote", "add", "upstream", 
                               "https://github.com/aws/deep-learning-containers.git"], check=True)
-            
             self.logger.info("Syncing with upstream...")
             self.run_subprocess_with_logging(["git", "fetch", "upstream"], check=True)
             self.run_subprocess_with_logging(["git", "checkout", "master"], check=True)
@@ -188,7 +179,7 @@ class Steps125Automation(BaseAutomation, LoggerMixin):
     def step5_package_model(self):
         """Step 5: Update package_model.py version and execute it"""
         self.logger.info("Step 5: Packaging model")
-        package_model_path = self.main_project_dir / "package_model.py"
+        package_model_path = self.main_project_dir/"updation"/ "package_model.py"
         self.logger.info(f"Main project dir: {self.main_project_dir}")
         self.logger.info(f"Looking for package_model.py in: {self.main_project_dir}")
         
@@ -230,7 +221,7 @@ class Steps125Automation(BaseAutomation, LoggerMixin):
             self.logger.info("Executing package_model.py...")
             try:
                 result = self.run_subprocess_with_logging(
-                    ['python', 'package_model.py'], 
+                    ['python', 'updation/package_model.py'], 
                     check=True,
                     timeout=1800  # 30 minutes timeout
                 )

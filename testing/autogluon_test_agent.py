@@ -4,8 +4,8 @@ import subprocess
 from pathlib import Path
 from typing import Dict, Optional
 import boto3
-from common import BaseAutomation
-from automation_logger import LoggerMixin
+from automation.common import BaseAutomation
+from automation.automation_logger import LoggerMixin
 import uuid
 
 class AutoGluonTestAgent(BaseAutomation, LoggerMixin):
@@ -14,7 +14,7 @@ class AutoGluonTestAgent(BaseAutomation, LoggerMixin):
     def __init__(self, current_version: str, previous_version: str, fork_url: str):
         super().__init__(current_version, previous_version, fork_url)
         self.test_results = {}
-        self.test_files_dir = Path(__file__).parent / "autogluon_test_files"
+        self.test_files_dir = Path(__file__).parent.parent / "autogluon_test_files"
         # Test configurations
         self.test_configs = [
             {

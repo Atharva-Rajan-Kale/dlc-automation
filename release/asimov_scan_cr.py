@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Optional, List
 from datetime import datetime
 from botocore.exceptions import ClientError, NoCredentialsError
-from automation_logger import LoggerMixin
+from automation.automation_logger import LoggerMixin
 class AsimovSecurityScanAutomation(LoggerMixin):
     """Automation for AsimovImageSecurityScan workspace and images.py updates"""
     
@@ -32,7 +32,7 @@ class AsimovSecurityScanAutomation(LoggerMixin):
         self.logger.info(f"AsimovImageSecurityScan Automation - Version {current_version}")
         self.logger.info(f"Release type: {'Major' if self.is_major_release else 'Minor'}")
         # Workspace paths
-        self.script_dir = Path(__file__).parent.parent
+        self.script_dir = Path(__file__).parent.parent.parent
         self.workspace_dir = self.script_dir / "AsimovImageSecurityScan"
         self.images_py_path = self.workspace_dir / "src" / "AsimovImageSecurityScan" / "src" / "asimov_image_security_scan" / "images.py"
         self.setup_logging(current_version,custom_name="asimov_scan")

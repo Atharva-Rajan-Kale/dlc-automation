@@ -16,8 +16,8 @@ from langchain_aws import ChatBedrock
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
-from common import BaseAutomation
-from automation_logger import LoggerMixin
+from automation.common import BaseAutomation
+from automation.automation_logger import LoggerMixin
 
 class SecurityTestAgent(BaseAutomation,LoggerMixin):
     """Agentic system for automatically fixing security test failures"""
@@ -168,27 +168,37 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
             )        
         self.detection_prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a vulnerability detection AI. Your ONLY job is to extract vulnerability information from security scan logs.
+
     ## WHAT TO EXTRACT
     ### OS Scan Vulnerabilities (ECR Enhanced Scan):
     Look for JSON patterns with vulnerability_id and package names:
     Total of X vulnerabilities need to be fixed on [container]:
     {{"package_name": [{{"vulnerability_id": "CVE-YYYY-NNNN", "description": "...", "severity": "..."}}]}}
+
     ### Python Scan Vulnerabilities (Safety Reports):
     Look for SAFETY_REPORT patterns in various formats:
     1. SAFETY_REPORT (FAILED) [pkg: package_name] [...] vulnerability_id='12345' [...] advisory='...'
     2. SafetyVulnerabilityAdvisory(vulnerability_id='12345', advisory="...", spec='...')
     3. [pkg: package_name] [installed: version] [vulnerabilities: [...]]
+
     Extract ALL Python vulnerabilities you find, including:
     - Package name from [pkg: ...] 
     - Vulnerability ID from vulnerability_id='...'
     - Full advisory text from advisory='...' or advisory="..."
     - Version constraints from spec='...'
+
     ## CRITICAL INSTRUCTIONS FOR PYTHON SCANS
     1. **FIND ALL SAFETY_REPORT LINES**: Look for any line containing "SAFETY_REPORT" and "(FAILED)"
     2. **EXTRACT COMPLETE ADVISORY**: Get the full advisory text, don't truncate it
     3. **HANDLE DIFFERENT QUOTE STYLES**: Advisory text may be in single quotes '...' or double quotes "..."
     4. **PRESERVE VERSION INFO**: If you see spec='<5.8.0' or similar, include this in the description
     5. **DEDUP BY PACKAGE+VULN_ID**: Same vulnerability_id in same package should only appear once
+    6. **SCAN THOROUGHLY**: A single package can have MULTIPLE different vulnerabilities - extract ALL of them
+    7. **DON'T STOP EARLY**: Continue scanning the entire log even after finding vulnerabilities
+
+    ## SPECIAL ATTENTION FOR TRANSFORMERS PACKAGE
+    The transformers package commonly has MULTIPLE vulnerabilities (77990, 77714, 77988, 77985, 77986, 78153).
+    Make sure to extract ALL transformers vulnerabilities, not just the first one you find.
 
     ## OUTPUT FORMAT
     Return ONLY a simple JSON list of detected vulnerabilities:
@@ -212,14 +222,20 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
         }}
     ]
     }}
-    Focus on accurate detection and complete data extraction. For Python scans, include ALL available information."""),
+
+    Focus on accurate detection and complete data extraction. For Python scans, include ALL available information.
+    BE ESPECIALLY THOROUGH - scan the ENTIRE log content for all vulnerabilities."""),
             ("human", """Extract all vulnerabilities from these security logs:
     Security Test Logs:
     {security_logs}
-    Extract every vulnerability you can find - both OS scan CVEs and Python Safety reports. Pay special attention to Python SAFETY_REPORT lines and extract complete advisory information. Return only the detection results in JSON format.""")
+
+    Extract every vulnerability you can find - both OS scan CVEs and Python Safety reports. Pay special attention to Python SAFETY_REPORT lines and extract complete advisory information. 
+
+    IMPORTANT: Make sure to find ALL vulnerabilities for each package, especially transformers which may have multiple vulnerabilities (77990, 77714, 77988, 77985, 77986, 78153, etc.).
+
+    Return only the detection results in JSON format.""")
         ])
         self.detection_chain = self.detection_prompt | self.llm | JsonOutputParser()
-
     def _get_graphql_tests_for_commit(self, pr_number: int, commit_sha: str) -> List[Dict]:
         """Get tests for a specific commit via GraphQL with enhanced ID retrieval"""
         query = """
@@ -371,7 +387,6 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
         for container_type in ['training', 'inference']:
             for device_type in ['cpu', 'gpu']:
                 allowlist_status = self.is_package_in_allowlist(package_name, container_type, device_type)
-                self.logger.info(f"jupyter_core in {container_type}/{device_type} allowlist: {allowlist_status}")
                 if allowlist_status['any_allowlist']:
                     self.logger.info(f"🔄 Skipping Dockerfile for {package_name} - already in {container_type}/{device_type} allowlist")
                     return True
@@ -707,49 +722,44 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
         original_dir = os.getcwd()
         try:
             os.chdir(self.repo_dir)
+            
             # Check if there are changes
             result = self.run_subprocess_with_logging(["git", "diff", "--quiet"], capture_output=True)
             if result.returncode == 0:
                 self.logger.info("ℹ️ No changes to commit")
                 return True
+            
             # Show what changes will be committed
             self.logger.info("📋 Changes to be committed:")
             diff_result = self.run_subprocess_with_logging(["git", "diff", "--name-only"], capture_output=True, text=True)
             if diff_result.stdout:
                 for file in diff_result.stdout.strip().split('\n'):
                     self.logger.info(f"   📝 Modified: {file}")
+            
             # Show a preview of the changes
             self.logger.info("\n📄 Preview of changes:")
             diff_preview = self.run_subprocess_with_logging(["git", "diff", "--stat"], capture_output=True, text=True)
             if diff_preview.stdout:
                 for line in diff_preview.stdout.strip().split('\n'):
                     self.logger.info(f"   {line}")
+            
             # Show the commit message
             self.logger.info(f"\n💬 Commit message: {commit_message}")
-            # Ask for user confirmation
-            self.logger.info("\n" + "="*60)
-            self.logger.info("🤔 CONFIRMATION REQUIRED:")
-            self.logger.info("="*60)
-            while True:
-                try:
-                    user_input = input("Do you want to commit and push these AI-recommended changes? (y/n): ").strip().lower()
-                    
-                    if user_input == 'y' or user_input == 'yes':
-                        self.logger.info("✅ User confirmed - proceeding with commit and push")
-                        break
-                    elif user_input == 'n' or user_input == 'no':
-                        self.logger.info("❌ User cancelled - aborting commit and push")
-                        return False
-                    else:
-                        print("Please enter 'y' for yes or 'n' for no")
-                        continue
-                        
-                except (EOFError, KeyboardInterrupt):
-                    self.logger.info("\n❌ User interrupted - aborting commit and push")
-                    return False
+            
+            # Configure Git with token before pushing
+            token = self.get_github_token()
+            if not token:
+                self.logger.error("❌ No GitHub token available for push")
+                return False
+            
+            if not self.configure_git_with_token(token):
+                self.logger.error("❌ Failed to configure git with token")
+                return False
+            
             self.run_subprocess_with_logging(["git", "add", "."], check=True)
             self.run_subprocess_with_logging(["git", "commit", "-m", commit_message], check=True)
             self.run_subprocess_with_logging(["git", "push", "origin", self.branch_name], check=True)
+            
             self.logger.info(f"✅ Successfully committed and pushed: {commit_message}")
             return True
         except Exception as e:
@@ -906,22 +916,18 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
             # First try rule-based pattern matching
             rule_based_constraint = self.extract_version_from_description_patterns(description, package_name)
             if rule_based_constraint and rule_based_constraint != "latest":
-                self.logger.info(f"📋 Found version constraint via patterns for {package_name}: {rule_based_constraint}")
                 return rule_based_constraint
             # If pattern matching fails, use AI for complex cases
             ai_constraint = self.extract_version_from_description_with_ai(description, package_name, vuln_data)
             if ai_constraint and ai_constraint != "latest":
-                self.logger.info(f"🤖 Found version constraint via AI for {package_name}: {ai_constraint}")
                 return ai_constraint
             return "latest"
         except Exception as e:
-            self.logger.warning(f"⚠️ Could not extract version from description for {package_name}: {e}")
             return "latest"
 
     def extract_version_from_description_patterns(self, description: str, package_name: str) -> str:
         """Extract version constraint using strict patterns"""
         try:
-            self.logger.info(f"🔍 DEBUG: Analyzing description for {package_name}")        
             strict_upgrade_patterns = [
                 rf'[Uu]sers should upgrade to version ([0-9]+\.[0-9]+(?:\.[0-9]+)?)',
                 rf'[Uu]sers should upgrade to ([0-9]+\.[0-9]+(?:\.[0-9]+)?)',
@@ -936,11 +942,9 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                 rf'upgrade to [A-Za-z\s]+ version ([0-9]+\.[0-9]+(?:\.[0-9]+)?) or later',
             ]
             for i, pattern in enumerate(strict_upgrade_patterns):
-                self.logger.info(f"🔍 DEBUG: Trying STRICT upgrade pattern {i+1}: {pattern}")
                 match = re.search(pattern, description, re.IGNORECASE)
                 if match:
                     version = match.group(1)
-                    self.logger.info(f"📋 ✅ STRICT UPGRADE PATTERN MATCHED! Found explicit upgrade version for {package_name}: {version}")
                     return f">={version}"            
             strict_fixed_patterns = [
                 rf'[Tt]his issue (?:has been|is) (?:patched|fixed|resolved) in version ([0-9]+\.[0-9]+(?:\.[0-9]+)?)',
@@ -950,16 +954,12 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                 rf'{re.escape(package_name)} ([0-9]+\.[0-9]+(?:\.[0-9]+)?) (?:fixes|resolves|patches) this',
             ]
             for i, pattern in enumerate(strict_fixed_patterns):
-                self.logger.info(f"🔍 DEBUG: Trying STRICT fixed pattern {i+1}: {pattern}")
                 match = re.search(pattern, description, re.IGNORECASE)
                 if match:
                     version = match.group(1)
-                    self.logger.info(f"📋 ✅ STRICT FIXED PATTERN MATCHED! Found explicit fix version for {package_name}: {version}")
                     return f">={version}"
-            self.logger.info(f"📋 ❌ No STRICT explicit upgrade patterns matched for {package_name}")
             return "latest"
         except Exception as e:
-            self.logger.warning(f"⚠️ Pattern matching failed for {package_name}: {e}")
             return "latest"
 
     def extract_version_from_description_with_ai(self, description: str, package_name: str, vuln_data: Dict) -> str:
@@ -1042,17 +1042,24 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                 installed_version = match.group(2).strip()
                 vulnerabilities_text = match.group(3).strip()
                 self.logger.info(f"📋 Processing Safety report for package: {package_name} (installed: {installed_version})")
-                self.logger.info(f"📋 Vulnerabilities section preview: {vulnerabilities_text[:200]}...")                
+                self.logger.info(f"📋 Vulnerabilities section preview: {vulnerabilities_text[:200]}...")
+                
+                # Improved advisory patterns that handle parentheses and various quote styles
                 advisory_patterns = [
-                    # Pattern A: Double quotes for advisory
-                    r'SafetyVulnerabilityAdvisory\(vulnerability_id=\'([^\']+)\'[^)]*advisory="([^"]+)"[^)]*spec=\'([^\']+)\'[^)]*\)',
-                    # Pattern B: Single quotes for advisory  
-                    r'SafetyVulnerabilityAdvisory\(vulnerability_id=\'([^\']+)\'[^)]*advisory=\'([^\']+)\'[^)]*spec=\'([^\']+)\'[^)]*\)',
-                    # Pattern C: No spec field (fallback)
-                    r'SafetyVulnerabilityAdvisory\(vulnerability_id=\'([^\']+)\'[^)]*advisory="([^"]+)"[^)]*\)',
-                    # Pattern D: More flexible order
-                    r'vulnerability_id=\'([^\']+)\'[^,]*,[^,]*advisory="([^"]+)"[^,]*,[^,]*spec=\'([^\']+)\'',
+                    # Pattern A: Single quotes for advisory (most common in logs)
+                    r'SafetyVulnerabilityAdvisory\(vulnerability_id=\'([^\']+)\'.*?advisory=\'(.*?)\'.*?spec=\'([^\']+)\'.*?\)',
+                    # Pattern B: Double quotes for advisory  
+                    r'SafetyVulnerabilityAdvisory\(vulnerability_id=\'([^\']+)\'.*?advisory="(.*?)".*?spec=\'([^\']+)\'.*?\)',
+                    # Pattern C: Single quotes, no spec field
+                    r'SafetyVulnerabilityAdvisory\(vulnerability_id=\'([^\']+)\'.*?advisory=\'(.*?)\'.*?\)',
+                    # Pattern D: Double quotes, no spec field
+                    r'SafetyVulnerabilityAdvisory\(vulnerability_id=\'([^\']+)\'.*?advisory="(.*?)".*?\)',
+                    # Pattern E: More flexible order with single quotes
+                    r'vulnerability_id=\'([^\']+)\'.*?advisory=\'(.*?)\'.*?spec=\'([^\']+)\'',
+                    # Pattern F: More flexible order with double quotes
+                    r'vulnerability_id=\'([^\']+)\'.*?advisory="(.*?)".*?spec=\'([^\']+)\'',
                 ]
+                
                 found_vulnerability = False
                 for pattern_idx, advisory_pattern in enumerate(advisory_patterns):
                     advisory_matches = re.finditer(advisory_pattern, vulnerabilities_text, re.DOTALL)
@@ -1079,24 +1086,22 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                         except Exception as e:
                             self.logger.warning(f"⚠️ Error parsing advisory match for {package_name}: {e}")
                             continue
+                
                 if not found_vulnerability:
                     self.logger.warning(f"❌ NO VULNERABILITIES EXTRACTED for {package_name}")
                     self.logger.warning(f"❌ Raw vulnerabilities text: {vulnerabilities_text}")
                     debug_vuln_ids = re.findall(r'vulnerability_id=\'([^\']+)\'', vulnerabilities_text)
                     if debug_vuln_ids:
-                        self.logger.warning(f"❌ DEBUG: Found vulnerability IDs but couldn't parse: {debug_vuln_ids}")
+                        # Try a simpler extraction for debugging
+                        simple_pattern = r'SafetyVulnerabilityAdvisory\(vulnerability_id=\'([^\']+)\''
+                        simple_matches = re.findall(simple_pattern, vulnerabilities_text)
                     else:
-                        self.logger.warning(f"❌ DEBUG: No vulnerability_id patterns found at all")
-            self.logger.info(f"📊 Total UNIQUE Safety vulnerabilities extracted: {len(vulnerabilities)}")
+                        self.logger.warning(f"DEBUG: No vulnerability_id patterns found at all")            
             if len(vulnerabilities) == 0:
-                self.logger.error("❌ ZERO vulnerabilities extracted! Debugging...")
                 safety_lines = re.findall(r'SAFETY_REPORT \(FAILED\) \[pkg: ([^\]]+)\]', logs)
-                self.logger.error(f"❌ Found {len(safety_lines)} SAFETY_REPORT lines for packages: {safety_lines}")
                 all_vuln_ids = re.findall(r'vulnerability_id=\'([^\']+)\'', logs)
-                self.logger.error(f"❌ Found {len(all_vuln_ids)} vulnerability_id patterns: {all_vuln_ids[:10]}")
             return vulnerabilities
         except Exception as e:
-            self.logger.error(f"❌ Error extracting Safety vulnerabilities: {e}")
             import traceback
             self.logger.error(f"Full traceback: {traceback.format_exc()}")
             return []
@@ -1104,35 +1109,29 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
     def extract_complete_advisory_content(self, package_name: str, vulnerability_id: str, logs: str) -> str:
         """Extract advisory content from new SafetyVulnerabilityAdvisory format"""
         try:
-            self.logger.info(f"🔍 Extracting advisory for {package_name} ({vulnerability_id}) from new Safety format")
             safety_advisory_pattern = rf'SafetyVulnerabilityAdvisory\(vulnerability_id=\'{re.escape(vulnerability_id)}\'[^)]*advisory="([^"]+)"[^)]*\)'
             match = re.search(safety_advisory_pattern, logs, re.DOTALL)
             if match:
                 advisory_content = match.group(1).strip()
-                self.logger.info(f"📋 Pattern 1 SUCCESS: Found advisory via SafetyVulnerabilityAdvisory format ({len(advisory_content)} chars)")
                 return advisory_content
             safety_advisory_pattern_single = rf'SafetyVulnerabilityAdvisory\(vulnerability_id=\'{re.escape(vulnerability_id)}\'[^)]*advisory=\'([^\']+)\'[^)]*\)'
             match = re.search(safety_advisory_pattern_single, logs, re.DOTALL)
             if match:
                 advisory_content = match.group(1).strip()
-                self.logger.info(f"📋 Pattern 2 SUCCESS: Found advisory via SafetyVulnerabilityAdvisory single quotes ({len(advisory_content)} chars)")
                 return advisory_content
             package_line_pattern = rf'SAFETY_REPORT \(FAILED\) \[pkg: {re.escape(package_name)}\].*?\[vulnerabilities: \[(.*?)\]\]'
             package_match = re.search(package_line_pattern, logs, re.DOTALL)
             if package_match:
                 vulnerabilities_section = package_match.group(1)
-                self.logger.info(f"📋 Pattern 3: Found vulnerabilities section for {package_name} ({len(vulnerabilities_section)} chars)")
                 vuln_in_section_pattern = rf'SafetyVulnerabilityAdvisory\(vulnerability_id=\'{re.escape(vulnerability_id)}\'[^)]*advisory="([^"]+)"[^)]*\)'
                 vuln_match = re.search(vuln_in_section_pattern, vulnerabilities_section, re.DOTALL)
                 if vuln_match:
                     advisory_content = vuln_match.group(1).strip()
-                    self.logger.info(f"📋 Pattern 3 SUCCESS: Found advisory in package section ({len(advisory_content)} chars)")
                     return advisory_content
             vuln_context_pattern = rf'vulnerability_id=\'{re.escape(vulnerability_id)}\'[^)]*advisory="([^"]+)"'
             match = re.search(vuln_context_pattern, logs, re.DOTALL)
             if match:
                 advisory_content = match.group(1).strip()
-                self.logger.info(f"📋 Pattern 4 SUCCESS: Found advisory via vulnerability ID search ({len(advisory_content)} chars)")
                 return advisory_content
             if hasattr(self, 'original_vulnerability_data') and self.original_vulnerability_data:
                 for pkg_name, pkg_vulns in self.original_vulnerability_data.items():
@@ -1141,81 +1140,45 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                             if isinstance(vuln, dict) and vuln.get('vulnerability_id') == vulnerability_id:
                                 description = vuln.get('description', '')
                                 if description:
-                                    self.logger.info(f"📋 Pattern 5 SUCCESS: Found description in original data ({len(description)} chars)")
                                     return description
-            self.logger.warning(f"❌ All patterns failed for {package_name} ({vulnerability_id})")
             return ""
         except Exception as e:
-            self.logger.error(f"❌ Error extracting advisory for {vulnerability_id}: {e}")
             return ""
 
     def get_optimal_version_constraint(self, package_name: str, vuln_data: Dict, all_logs: str, vulnerability_type: str = 'os_scan') -> str:
         """Description extraction"""
-        self.logger.info(f"🔍 Getting constraint for {package_name} ({vulnerability_type})")
-        self.logger.info("="*80)
-        self.logger.info(f"🎯 Checking advisory/description for explicit version info...")
         if vulnerability_type == 'py_scan':
             vulnerability_id = vuln_data.get('vulnerability_id', '')
             full_advisory = self.extract_complete_advisory_content(package_name, vulnerability_id, all_logs)
-            self.logger.info(f"🔍 DEBUG: Complete advisory for {package_name} ({vulnerability_id}):")
-            self.logger.info(f"🔍 DEBUG: '{full_advisory}'")
-            self.logger.info(f"🔍 DEBUG: Advisory length: {len(full_advisory)} characters")
             if full_advisory:
                 version_constraint = self.extract_version_from_description_patterns(full_advisory, package_name)
                 if version_constraint and version_constraint != "latest":
                     extracted_version = version_constraint.replace('>=', '').replace('>', '').replace('<', '').replace('=', '')
-                    self.logger.info(f"📋 ✅ SUCCESS: Found explicit version in pyscan advisory!")
-                    self.logger.info(f"📋 ✅ {package_name}: extracted version '{extracted_version}' → constraint {version_constraint}")
-                    self.logger.info(f"📋 ✅ Will add to Dockerfile: {package_name}{version_constraint}")
-                    self.logger.info("="*80)
                     return version_constraint
                 else:
-                    self.logger.info(f"📋 ❌ No explicit version found in pyscan advisory")
+                    self.logger.info(f"No explicit version found in pyscan advisory")
             else:
-                self.logger.info(f"📋 ❌ Could not extract advisory content")
+                self.logger.info(f"Could not extract advisory content")
         else:
-            self.logger.info(f"🔍 DEBUG: Checking OS scan description for {package_name}")
-            self.logger.info("🔍 DEBUG: ========== VULN_DATA INSPECTION ==========")
-            self.logger.info(f"🔍 DEBUG: vuln_data keys: {list(vuln_data.keys()) if isinstance(vuln_data, dict) else 'Not a dict'}")
             if 'original_data' in vuln_data:
-                self.logger.info(f"🔍 DEBUG: original_data keys: {list(vuln_data['original_data'].keys()) if isinstance(vuln_data['original_data'], dict) else 'Not a dict'}")
                 original_desc = vuln_data['original_data'].get('description', '')
-                self.logger.info(f"🔍 DEBUG: original_data description length: {len(original_desc)}")
-                self.logger.info(f"🔍 DEBUG: original_data description first 200 chars: '{original_desc[:200]}'")
-                self.logger.info(f"🔍 DEBUG: original_data description last 200 chars: '{original_desc[-200:]}'")
             else:
                 self.logger.info(f"🔍 DEBUG: No 'original_data' in vuln_data")
             direct_desc = vuln_data.get('description', '')
-            self.logger.info(f"🔍 DEBUG: direct description length: {len(direct_desc)}")
-            self.logger.info(f"🔍 DEBUG: direct description first 200 chars: '{direct_desc[:200]}'")
-            self.logger.info(f"🔍 DEBUG: direct description last 200 chars: '{direct_desc[-200:]}'")
             full_description = ""
             if 'original_data' in vuln_data and vuln_data['original_data']:
                 full_description = vuln_data['original_data'].get('description', '')
-                self.logger.info(f"🔍 DEBUG: Using original_data description ({len(full_description)} chars)")
             if not full_description:
                 full_description = vuln_data.get('description', '')
-                self.logger.info(f"🔍 DEBUG: Fallback to direct description ({len(full_description)} chars)")
-            self.logger.info(f"🔍 DEBUG: ========== FINAL DESCRIPTION TO ANALYZE ==========")
-            self.logger.info(f"🔍 DEBUG: Complete OS description for {package_name}:")
-            self.logger.info(f"🔍 DEBUG: Length: {len(full_description)} characters")
-            self.logger.info(f"🔍 DEBUG: Full text: '{full_description}'")
             if full_description:
                 version_constraint = self.extract_version_from_description_patterns(full_description, package_name)
                 if version_constraint and version_constraint != "latest":
                     extracted_version = version_constraint.replace('>=', '').replace('>', '').replace('<', '').replace('=', '')
-                    self.logger.info(f"📋 ✅ SUCCESS: Found explicit version in OS scan description!")
-                    self.logger.info(f"📋 ✅ {package_name}: extracted version '{extracted_version}' → constraint {version_constraint}")
-                    self.logger.info(f"📋 ✅ Will add to Dockerfile: {package_name}{version_constraint}")
-                    self.logger.info("="*80)
                     return version_constraint
                 else:
-                    self.logger.info(f"📋 ❌ No explicit version found in OS scan description")
+                    self.logger.info(f"No explicit version found in OS scan description")
             else:
-                self.logger.info(f"📋 ❌ No OS scan description available")
-        self.logger.info(f"📋 ⚠️ DECISION: No explicit version found for {package_name}")
-        self.logger.info(f"📋 ⚠️ Will skip Dockerfile and add {package_name} to allowlist")
-        self.logger.info("="*80)
+                self.logger.info(f"No OS scan description available")
         return "skip_dockerfile"
 
     def wait_for_security_tests_to_complete(self, pr_number: int, max_wait_minutes: int = 180) -> bool:
@@ -1395,7 +1358,6 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
     
     def preprocess_logs_for_ai(self, logs: str) -> str:
         """Preprocess logs and preserve original vulnerability data for exact allowlist formatting"""
-        self.logger.info("🔧 Preprocessing logs for better AI analysis...")
         processed_logs = logs
         self.original_vulnerability_data = {}
         lines = logs.split('\n')
@@ -1404,7 +1366,6 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
         while i < len(lines):
             line = lines[i]
             if 'Total of' in line and 'vulnerabilities need to be fixed' in line and ':' in line:
-                self.logger.info(f"🔍 Found vulnerability line: {line[:100]}...")
                 json_content = ""
                 for j in range(i + 1, min(i + 20, len(lines))):
                     next_line = lines[j].strip()
@@ -1428,7 +1389,6 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                         if '{' in json_content:
                             json_start = json_content.find('{')
                             json_content = json_content[json_start:]
-                        self.logger.info(f"🔍 Attempting to parse complete JSON block ({len(json_content)} chars)")
                         parsed_json = json.loads(json_content)
                         for package_name, package_vulns in parsed_json.items():
                             if isinstance(package_vulns, list):
@@ -1437,14 +1397,10 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                                     self.original_vulnerability_data[package_name].extend(package_vulns)
                                 else:
                                     self.original_vulnerability_data[package_name] = package_vulns
-                                self.logger.info(f"📋 Stored original data for {package_name}: {len(package_vulns)} vulnerabilities")
                         processed_blocks += 1
-                        self.logger.info(f"✅ Successfully processed vulnerability block {processed_blocks} with {len(parsed_json)} packages")
                     except json.JSONDecodeError as e:
                         self.logger.warning(f"❌ Could not parse JSON block: {e}")
             i += 1
-        self.logger.info("🤖 Python vulnerabilities will be extracted by AI only")
-        self.logger.info(f"🔧 Preprocessing complete. Stored original data for {len(self.original_vulnerability_data)} packages")
         return processed_logs
 
     def apply_dockerfile_fixes(self, container_type: str, fixes: List[Dict]) -> Tuple[bool, Dict[str, str]]:
@@ -1688,24 +1644,29 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
         return success
     
     def truncate_logs_for_ai(self, logs: str, max_chars: int = 100000) -> str:
-        """Truncate logs to fit within AI token limits while preserving vulnerability data"""
+        """Enhanced log truncation that preserves more vulnerability data"""
         if len(logs) <= max_chars:
-            return logs
-        self.logger.info(f"📏 Truncating logs from {len(logs)} to ~{max_chars} chars for AI analysis")
-        # Extract ALL complete vulnerability JSON blocks first
+            return logs        
+        # Extract ALL SAFETY_REPORT lines first (these are critical)
+        safety_lines = []
+        for line in logs.split('\n'):
+            if 'SAFETY_REPORT' in line and 'FAILED' in line:
+                safety_lines.append(line)
+        
+        # Extract ALL complete vulnerability JSON blocks
         vulnerability_blocks = []
         lines = logs.split('\n')
         i = 0
         while i < len(lines):
             line = lines[i]
             if 'Total of' in line and 'vulnerabilities need to be fixed' in line and ':' in line:
-                self.logger.info(f"🔍 Found vulnerability line at {i}: {line[:100]}...")                
                 # Look for JSON starting in the next few lines
                 json_start_idx = None
                 for j in range(i + 1, min(i + 20, len(lines))):
                     if lines[j].strip().startswith('{'):
                         json_start_idx = j
                         break
+                
                 if json_start_idx is not None:
                     # Extract the complete JSON block
                     brace_count = 0
@@ -1720,45 +1681,48 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                         if brace_count == 0 and any(char in line_content for char in '}'):
                             json_end_idx = k
                             break
+                    
                     if brace_count == 0:
                         complete_block = [line] + json_lines
                         block_text = '\n'.join(complete_block)
                         vulnerability_blocks.append(block_text)
-                        self.logger.info(f"✅ Extracted complete vulnerability block ({len(block_text)} chars)")
                         i = json_end_idx + 1
                         continue
             i += 1
-        # Extract Python scan vulnerability patterns
-        py_vulnerability_lines = []
-        for line in lines:
-            if ('SAFETY_REPORT' in line and 'FAILED' in line and 'vulnerability_id' in line):
-                py_vulnerability_lines.append(line)        
+        
+        # Combine critical content with priority order
         critical_content = '\n'.join(vulnerability_blocks)
-        if py_vulnerability_lines:
-            critical_content += '\n' + '\n'.join(py_vulnerability_lines)
+        if safety_lines:
+            critical_content += '\n\n=== SAFETY REPORTS ===\n' + '\n'.join(safety_lines)
+        
         critical_size = len(critical_content)
         remaining_space = max_chars - critical_size
-        self.logger.info(f"📊 Critical vulnerability data: {critical_size} chars")
-        self.logger.info(f"📊 Remaining space for other content: {remaining_space} chars")
+
         if critical_size > max_chars:
             self.logger.warning(f"⚠️ Critical vulnerability data ({critical_size} chars) exceeds max_chars ({max_chars})!")
-            self.logger.warning("⚠️ Increasing limit to preserve all vulnerability data")
+            self.logger.warning("⚠️ Returning all critical data despite size limit")
             return critical_content
+        
+        # Add other important lines if there's space
         other_important_lines = []
         if remaining_space > 1000:
             for line in lines:
-                # Skip lines already included in vulnerability blocks
+                # Skip lines already included in vulnerability blocks or safety lines
                 skip_line = False
                 for block in vulnerability_blocks:
                     if line.strip() in block:
                         skip_line = True
                         break
+                if line in safety_lines:
+                    skip_line = True
+                
                 if not skip_line and line.strip():
                     if any(keyword in line.lower() for keyword in [
                         'error', 'failed', 'exception', 'traceback', 
                         'test', 'assert', 'cve', 'vulnerability'
                     ]):
-                        other_important_lines.append(line)        
+                        other_important_lines.append(line)
+        
         final_content = critical_content
         if other_important_lines and remaining_space > 100:
             other_content = '\n'.join(other_important_lines)
@@ -1767,13 +1731,7 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
             else:
                 truncated_other = other_content[:remaining_space-50] + '\n[... truncated ...]'
                 final_content += '\n\n=== OTHER LOG CONTENT ===\n' + truncated_other
-        final_size = len(final_content)
-        self.logger.info(f"📏 Final truncated size: {final_size} chars (preserved {len(vulnerability_blocks)} vulnerability blocks)")
-        for i, block in enumerate(vulnerability_blocks):
-            if block in final_content:
-                self.logger.info(f"✅ Vulnerability block {i+1} preserved intact")
-            else:
-                self.logger.error(f"❌ Vulnerability block {i+1} was corrupted during truncation!")
+        final_size = len(final_content)        
         return final_content
     
     def detect_container_type_from_test_name(self, test_name: str) -> str:
@@ -1791,14 +1749,14 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
             else:
                 return 'unknown'
 
-    def ai_detect_vulnerabilities_only_with_retry(self, logs: str, max_retries: int = 3) -> Dict:
+    def ai_detect_vulnerabilities_only_with_retry(self, logs: str, max_retries: int = 1) -> Dict:
         """Use AI only for vulnerability detection - Enhanced for Python scans"""
         self.logger.info("🤖 Using AI for BOTH OS and Python vulnerability detection...")
         
         for attempt in range(max_retries):
             try:
-                # Truncate logs for AI processing
-                truncated_logs = self.truncate_logs_for_ai(logs, max_chars=75000)  # Increased limit
+                # Enhanced truncation that preserves more vulnerability data
+                truncated_logs = self.truncate_logs_for_ai(logs, max_chars=100000)  # Increased limit
                 # Preprocess logs to help AI detection and store original OS data
                 processed_logs = self.preprocess_logs_for_ai(truncated_logs)
                 self.logger.info(f"🧠 AI attempt {attempt + 1}/{max_retries} - detecting ALL vulnerabilities...")
@@ -1828,6 +1786,7 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                 ai_os_vulns = detected.get('os_vulns', [])
                 ai_py_vulns = detected.get('py_vulns', [])
                 self.logger.info(f"🤖 AI detected {len(ai_os_vulns)} OS and {len(ai_py_vulns)} Python vulnerabilities")
+                
                 # Validate that we got reasonable results
                 if len(ai_os_vulns) == 0 and len(ai_py_vulns) == 0:
                     if 'SAFETY_REPORT' in logs or 'vulnerability_id' in logs:
@@ -1864,7 +1823,6 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                             # Keep original description
                             enhanced_vuln['description'] = original_description
                         enhanced_os_vulns.append(enhanced_vuln)
-                        self.logger.info(f"✅ Enhanced OS vuln: {vuln_id} in {package}")
                     else:
                         # Fallback to AI detection only
                         enhanced_vuln = {
@@ -1886,8 +1844,6 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                         'spec': ai_vuln.get('spec', '')
                     }
                     enhanced_py_vulns.append(enhanced_py_vuln)
-                    self.logger.info(f"✅ Enhanced Python vuln: {ai_vuln.get('vulnerability_id')} in {ai_vuln.get('package')}")
-                self.logger.info(f"🔍 ENHANCED RESULT: {len(enhanced_os_vulns)} OS, {len(enhanced_py_vulns)} Python vulnerabilities (all via AI)")
                 return {
                     'os_vulns': enhanced_os_vulns,      
                     'py_vulns': enhanced_py_vulns 
@@ -1905,7 +1861,7 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                     # Last resort fallback to regex
                     self.logger.info("🔄 Using regex fallback for Python vulnerabilities...")
                     return self.ai_detection_with_regex_fallback(logs)
-
+    
     def ai_detection_with_regex_fallback(self, logs: str) -> Dict:
         """Fallback when AI completely fails - use regex for Python only"""
         self.logger.info("🔄 AI failed completely, using regex fallback for Python vulnerabilities...")
@@ -1997,7 +1953,7 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
     
     def ai_detect_vulnerabilities_only(self, logs: str) -> Dict:
         """Main entry point, delegates to retry version"""
-        return self.ai_detect_vulnerabilities_only_with_retry(logs, max_retries=3)
+        return self.ai_detect_vulnerabilities_only_with_retry(logs, max_retries=1)
         
     def extract_all_vulnerabilities(self, logs: str) -> Dict:
         """Extract all vulnerabilities using AI for detection only, then rule-based formatting"""
@@ -2076,7 +2032,6 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                     if isinstance(package_vulns, list):
                         for vuln in package_vulns:
                             if isinstance(vuln, dict) and vuln.get('vulnerability_id') == vulnerability_id:
-                                self.logger.info(f"📋 Found complete original data for {vulnerability_id} in {package_name}")
                                 return vuln 
                 for stored_package, stored_vulns in self.original_vulnerability_data.items():
                     if isinstance(stored_vulns, list):
@@ -2084,9 +2039,7 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                             if isinstance(vuln, dict) and vuln.get('vulnerability_id') == vulnerability_id:
                                 if (package_name.lower() in stored_package.lower() or 
                                     stored_package.lower() in package_name.lower()):
-                                    self.logger.info(f"📋 Found complete original data for {vulnerability_id} via package match: {stored_package}")
                                     return vuln
-                self.logger.warning(f"⚠️ No original vulnerability data found for {vulnerability_id} in {package_name}")
                 return {}
             else:
                 self.logger.warning(f"⚠️ No original_vulnerability_data available")
@@ -2108,7 +2061,6 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
         for i, container_type in enumerate(container_order):
             logs = self.container_specific_logs.get(container_type, '')
             if not logs.strip():
-                self.logger.info(f"📊 No logs for {container_type} container")
                 continue
             self.logger.info(f"📊 Processing {container_type} container logs ({len(logs)} chars)")
             # Add 5-minute delay before inference processing to avoid throttling
@@ -2143,17 +2095,13 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                         self.logger.info(f"✅ NEW PY ({container_type}): {vuln['package']} - {vuln['vulnerability_id']}")
                     else:
                         self.logger.info(f"⚠️ DUPLICATE PY WITHIN {container_type}: {vuln['package']} - {vuln['vulnerability_id']}")
-                self.logger.info(f"📊 {container_type}: {len(result[container_type]['os_vulnerabilities'])} OS, {len(result[container_type]['py_vulnerabilities'])} Python vulnerabilities (container-specific dedup)")
             except Exception as e:
                 self.logger.error(f"❌ Failed to extract vulnerabilities for {container_type}: {e}")
                 import traceback
                 self.logger.error(f"Full traceback: {traceback.format_exc()}")
         self.container_specific_vulnerabilities = result
-        # Log final summary - now showing vulnerabilities can appear in multiple containers
         total_os = sum(len(container['os_vulnerabilities']) for container in result.values())
         total_py = sum(len(container['py_vulnerabilities']) for container in result.values())
-        self.logger.info(f"📊 FINAL: {total_os} total OS, {total_py} total Python vulnerabilities across all containers")
-        self.logger.info("ℹ️ Note: Same vulnerability can appear in multiple containers and will be handled separately")
         return result
 
     def extract_all_vulnerabilities_fallback(self, logs: str) -> Dict:
@@ -2208,7 +2156,6 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
 
     def check_pyscan_constraint_and_cross_contaminate(self, vulnerabilities: Dict, all_logs: str) -> Dict:
         """Check pyscan constraints and cross-contaminate to OS scan if needed"""
-        self.logger.info("🔍 Checking pyscan constraints for cross-contamination...")
         failed_pyscan_packages = set()
         # Check all pyscan vulnerabilities first
         for vuln in vulnerabilities['py_vulnerabilities']:
@@ -2218,7 +2165,6 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
                 package, {}, all_logs, 'py_scan'
             )
             if pyscan_constraint == "skip_dockerfile":
-                self.logger.warning(f"⚠️ Pyscan constraint failed for {package} - will cross-contaminate to OS scan")
                 failed_pyscan_packages.add(package)
         # Cross-contaminate: if pyscan failed, also allowlist any OS scan vulnerabilities for the same package
         if failed_pyscan_packages:
@@ -2226,12 +2172,10 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
             for vuln in vulnerabilities['os_vulnerabilities']:
                 if vuln['package'] in failed_pyscan_packages:
                     vuln['cross_contaminated'] = True
-                    self.logger.info(f"🔄 Marked OS scan vulnerability {vuln['vulnerability_id']} for {vuln['package']} as cross-contaminated")
         return vulnerabilities
 
     def attempt_dockerfile_fixes_first_by_container(self, vulnerabilities: Dict) -> bool:
         """Apply Dockerfile fixes only to relevant container types"""
-        self.logger.info("🔧 Applying container-specific Dockerfile fixes with pyscan cross-contamination...")
         all_logs = getattr(self, 'current_security_logs', '')
         vulnerabilities = self.check_pyscan_constraint_and_cross_contaminate(vulnerabilities, all_logs)
         # Group vulnerabilities by container type
@@ -2747,8 +2691,64 @@ class SecurityTestAgent(BaseAutomation,LoggerMixin):
             self.logger.warning(f"⚠️ Found {len(failing_autogluon_tests)} failing AutoGluon tests")
             self.logger.info("ℹ️ AutoGluon test failures detected but not blocking security analysis")
             return True 
-        
         return True
+    
+    def get_github_token(self) -> Optional[str]:
+        """Get GitHub token from environment or GitHub CLI"""
+        token = os.environ.get('GITHUB_TOKEN')
+        if token:
+            return token
+        try:
+            result = self.run_subprocess_with_logging(
+                ["gh", "auth", "token"], 
+                capture_output=True, 
+                text=True, 
+                check=True
+            )
+            return result.stdout.strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            self.logger.warning("Could not get GitHub token from gh CLI")
+            return None
+
+    def configure_git_with_token(self, token: str) -> bool:
+        """Configure Git with GitHub token for authentication"""
+        try:
+            # Get current remote URL
+            result = self.run_subprocess_with_logging(
+                ["git", "remote", "get-url", "origin"], 
+                capture_output=True, text=True
+            )
+            current_url = result.stdout.strip()
+            
+            # Configure git user (required for commits)
+            self.run_subprocess_with_logging(
+                ["git", "config", "user.name", "Atharva-Rajan-Kale"], 
+                capture_output=True
+            )
+            self.run_subprocess_with_logging(
+                ["git", "config", "user.email", "atharvakale912@gmail.com"], 
+                capture_output=True
+            )
+            
+            # Add token to URL if it's a GitHub URL and doesn't already have a token
+            if "github.com" in current_url and "@github.com" not in current_url:
+                if current_url.startswith("https://github.com/"):
+                    authenticated_url = current_url.replace("https://github.com/", f"https://{token}@github.com/")
+                else:
+                    authenticated_url = current_url.replace("github.com", f"{token}@github.com")
+                
+                self.run_subprocess_with_logging(
+                    ["git", "remote", "set-url", "origin", authenticated_url], 
+                    check=True
+                )
+                self.logger.info("✅ Configured git remote with GitHub token")
+            else:
+                self.logger.info("ℹ️ Git remote already configured or not a GitHub URL")
+            
+            return True
+        except Exception as e:
+            self.logger.error(f"❌ Failed to configure git with token: {e}")
+            return False
 def main():
     """Main function for Security Test Agent"""
     import argparse

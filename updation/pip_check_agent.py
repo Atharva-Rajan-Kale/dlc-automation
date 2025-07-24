@@ -16,8 +16,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 
-from common import BaseAutomation, ECRImageSelector
-from automation_logger import LoggerMixin
+from automation.common import BaseAutomation, ECRImageSelector
+from automation.automation_logger import LoggerMixin
 
 @dataclass
 class DependencyConflict:
@@ -56,11 +56,9 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
         current_time = time.time()
         time_since_last_usage = current_time - self.last_ai_usage_time
         wait_time_seconds = 120  # 3 minutes
-        
         if self.last_ai_usage_time > 0 and time_since_last_usage < wait_time_seconds:
             remaining_wait = wait_time_seconds - time_since_last_usage
             self.logger.info(f"⏳ Waiting {remaining_wait:.1f} seconds to avoid AI throttling...")
-            
             # Show countdown in 30-second intervals
             while remaining_wait > 0:
                 if remaining_wait > 30:
@@ -71,9 +69,7 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                     self.logger.info(f"⏳ {remaining_wait:.0f} seconds remaining...")
                     time.sleep(remaining_wait)
                     remaining_wait = 0
-            
             self.logger.info("✅ Wait complete, proceeding with AI call")
-        
         # Update the last usage time
         self.last_ai_usage_time = time.time()
     
@@ -283,13 +279,10 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
     def parse_dependency_conflicts_regex(self, pip_output: str) -> List[DependencyConflict]:
         """Fallback regex-based parsing of pip check output"""
         conflicts = []
-        
         # Pattern for dependency conflicts
         dep_pattern = r'(\S+)\s+([\d.]+)\s+has\s+requirement\s+([^,]+(?:,\s*[^,]+)*),\s+but\s+you\s+have\s+(\S+)\s+([\d.]+)'
-        
         # Pattern for platform issues  
         platform_pattern = r'(\S+)\s+([\d.]+)\s+is\s+not\s+supported\s+on\s+this\s+platform'
-        
         for line in pip_output.split('\n'):
             # Check for dependency conflicts
             dep_match = re.search(dep_pattern, line)
@@ -299,7 +292,6 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                 requirement = dep_match.group(3)
                 package = dep_match.group(4)
                 installed_version = dep_match.group(5)
-                
                 conflict = DependencyConflict(
                     package=package,
                     installed_version=installed_version,
@@ -309,13 +301,11 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                 )
                 conflicts.append(conflict)
                 continue
-            
             # Check for platform issues
             platform_match = re.search(platform_pattern, line)
             if platform_match:
                 package = platform_match.group(1)
                 version = platform_match.group(2)
-                
                 conflict = DependencyConflict(
                     package=package,
                     installed_version=version,
@@ -324,7 +314,6 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                     conflict_type="platform"
                 )
                 conflicts.append(conflict)
-        
         return conflicts
 
     def categorize_conflicts(self, conflicts: List[DependencyConflict]) -> Dict[str, List[DependencyConflict]]:
@@ -334,10 +323,8 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
             'one_to_many': [],
             'platform': []
         }
-        
         # Group by CONFLICTING package to detect one_to_many (e.g., pathos causing multiple conflicts)
         conflicting_package_groups = {}
-        
         for conflict in conflicts:
             if conflict.conflict_type == "platform":
                 categorized['platform'].append(conflict)
@@ -347,7 +334,6 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                 if conflicting_pkg not in conflicting_package_groups:
                     conflicting_package_groups[conflicting_pkg] = []
                 conflicting_package_groups[conflicting_pkg].append(conflict)
-        
         # Categorize based on number of conflicts per conflicting package
         for conflicting_package, pkg_conflicts in conflicting_package_groups.items():
             if len(pkg_conflicts) == 1:
@@ -359,47 +345,36 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                     conflict.conflict_type = "one_to_many"
                 categorized['one_to_many'].extend(pkg_conflicts)
                 self.logger.info(f"🔍 Detected one-to-many: {conflicting_package} causes {len(pkg_conflicts)} conflicts")
-        
         self.logger.info(f"📊 Conflict categorization: one_to_one={len(categorized['one_to_one'])}, "
                         f"one_to_many={len(categorized['one_to_many'])}, platform={len(categorized['platform'])}")
-        
         return categorized
 
     def run_compatibility_dry_run(self, image_uri: str, package: str, current_version: str, direction: str, related_packages: List[str]) -> int:
         """Run actual Docker dry run to check how many packages would be affected by version change"""
         self.logger.info(f"🧪 Running compatibility dry run for {package} {direction} {current_version}")
-        
         try:
             if direction == "<":
                 constraint = f"{package}<{current_version}"
             else:  # direction == ">"
                 constraint = f"{package}>{current_version}"
-            
             self.logger.info(f"🔍 Testing constraint: {constraint}")
-            
             # Use the working command format with -it and bash -c
             cmd = [
                 "docker", "run", "--rm", image_uri, "bash", "-c",  # ✅ --rm works in batch
                 f"pip install pipdeptree && pip install --dry-run '{constraint}'"
             ]
-            
             self.logger.info(f"🔍 Running command: pip install pipdeptree && pip install --dry-run '{constraint}'")
-            
             result = self.run_subprocess_with_logging(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=180  # 3 minute timeout
             )
-            
             output = result.stdout + result.stderr
             self.logger.info(f"📊 Dry run output (first 500 chars): {output[:500]}...")
-            
             # Parse the "Would install" line to count packages
             affected_count = 0
-            
             lines = output.split('\n')
-            
             # First, try to find the "Would install" line
             for line in lines:
                 line = line.strip()
@@ -410,28 +385,23 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                     else:
                         # Remove "Would install " prefix
                         packages_part = line[len('Would install'):].strip()
-                    
                     # Count space-separated package entries
                     package_entries = packages_part.split()
                     affected_count = len(package_entries)
                     self.logger.info(f"📋 Would install packages: {package_entries}")
                     break
-            
             # If we didn't find "Would install" line, try alternative parsing
             if affected_count == 0:
                 self.logger.info("📋 'Would install' line not found, trying alternative parsing...")
-                
                 # Look for "Downloading" lines as backup (only after pipdeptree install section)
                 downloading_packages = set()
                 in_dry_run_section = False
-                
                 for line in lines:
                     line = line.strip()
                     # Look for the start of the actual dry run (after pipdeptree install)
                     if f"Collecting {package}" in line and package != "pipdeptree":
                         in_dry_run_section = True
                         self.logger.info(f"📋 Found start of dry run section: {line}")
-                    
                     if in_dry_run_section and line.startswith('Downloading ') and '.whl' in line:
                         # Extract package name from "Downloading package-1.0.0-py3-none-any.whl"
                         parts = line.split()
@@ -441,24 +411,20 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                                 package_name = filename.split('-')[0]
                                 downloading_packages.add(package_name)
                                 self.logger.info(f"📋 Found downloading package: {package_name}")
-                
                 # Use the count from downloading packages
                 if downloading_packages:
                     affected_count = len(downloading_packages)
                     self.logger.info(f"📋 Total packages to download: {sorted(downloading_packages)}")
-                
                 # If still 0, look for the complete output in the last part
                 if affected_count == 0:
                     self.logger.info("📋 Still no packages found, checking complete output...")
                     # Print more of the output to debug
                     self.logger.info(f"📊 Complete output: {output}")
-                    
                     # Look for any mention of "Would install" even if formatted differently
                     for line in lines:
                         if "would install" in line.lower():
                             self.logger.info(f"📋 Found potential install line: {line}")
                             break
-            
             # If return code indicates error, add penalty
             if result.returncode != 0:
                 if affected_count == 0:
@@ -466,10 +432,8 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                 else:
                     affected_count += 2  # Small penalty for warnings/errors but partial success
                 self.logger.warning(f"⚠️ Dry run returned error code {result.returncode}")
-            
             self.logger.info(f"📊 Estimated affected packages for {constraint}: {affected_count}")
             return affected_count
-            
         except subprocess.TimeoutExpired:
             self.logger.warning(f"⏰ Compatibility dry run timed out for {constraint}")
             return 999  # High number to indicate failure
@@ -480,10 +444,8 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
     def apply_dockerfile_fix(self, container_type: str, package: str, constraint: str) -> bool:
         """Apply package constraint fix to Dockerfiles - avoid duplicates"""
         self.logger.info(f"🔧 Adding {package} {constraint} to {container_type} Dockerfiles")
-        
         major_minor = '.'.join(self.current_version.split('.')[:2])
         success = True
-        
         for device_type in ['cpu', 'gpu']:
             try:
                 if device_type == 'cpu':
@@ -494,41 +456,32 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                     if not cuda_dirs:
                         continue
                     dockerfile_path = cuda_dirs[0] / "Dockerfile.gpu"
-                
                 if not dockerfile_path.exists():
                     continue
-                
                 content = dockerfile_path.read_text()
-                
                 # Check if package already exists in Dockerfile
                 if package in content:
                     self.logger.info(f"⚠️ Package {package} already exists in {dockerfile_path}, skipping to avoid duplicates")
                     continue
-                
                 lines = content.split('\n')
-                
                 # Find the line with autogluon installation
                 target_substring = "autogluon==${AUTOGLUON_VERSION}"
                 insert_index = -1
                 autogluon_line_index = -1
-                
                 for i, line in enumerate(lines):
                     if target_substring in line:
                         insert_index = i + 1
                         autogluon_line_index = i
                         break
-                
                 if insert_index == -1:
                     self.logger.error(f"❌ Could not find autogluon installation line in {dockerfile_path}")
                     success = False
                     continue
-                
                 # Check if autogluon line ends with backslash
                 autogluon_line = lines[autogluon_line_index].rstrip()
                 if not autogluon_line.endswith('\\'):
                     lines[autogluon_line_index] = autogluon_line + ' \\'
                     self.logger.info(f"🔧 Added continuation backslash to autogluon line")
-                
                 # Determine if our new line should have a backslash
                 needs_backslash = False
                 for i in range(insert_index, len(lines)):
@@ -538,56 +491,44 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                         break
                     elif line and not line.startswith('&&') and not line.startswith('#'):
                         break
-                
                 # Insert the package constraint
                 if needs_backslash:
-                    new_line = f" && pip install --no-cache-dir -U \"{package}{constraint}\" \\"
+                    new_line = f" && pip install --no-cache-dir \"{package}{constraint}\" \\"
                 else:
-                    new_line = f" && pip install --no-cache-dir -U \"{package}{constraint}\""
-                
+                    new_line = f" && pip install --no-cache-dir \"{package}{constraint}\""
                 lines.insert(insert_index, new_line)
-                
                 # Write back to file
                 new_content = '\n'.join(lines)
                 dockerfile_path.write_text(new_content)
-                
                 self.logger.info(f"✅ Updated {dockerfile_path} with {package}{constraint}")
-                
             except Exception as e:
                 self.logger.error(f"❌ Failed to update Dockerfile for {device_type}: {e}")
                 success = False
-        
         return success
 
     def handle_one_to_one_conflicts(self, conflicts: List[DependencyConflict], container_type: str) -> bool:
         """Handle one-to-one dependency conflicts by updating the dependency"""
         self.logger.info(f"🔧 Handling {len(conflicts)} one-to-one conflicts for {container_type}")
-        
         success = True
         for conflict in conflicts:
             try:
                 # Extract version constraint
                 constraint = conflict.required_constraint
                 package = conflict.package
-                
                 self.logger.info(f"📦 Updating {package} to meet requirement: {constraint}")
-                
                 if self.apply_dockerfile_fix(container_type, package, constraint):
                     self.logger.info(f"✅ Added {package} {constraint} to Dockerfile")
                 else:
                     self.logger.error(f"❌ Failed to add {package} {constraint} to Dockerfile")
                     success = False
-                    
             except Exception as e:
                 self.logger.error(f"❌ Failed to handle one-to-one conflict for {conflict.package}: {e}")
                 success = False
-        
         return success
 
     def handle_one_to_many_conflicts(self, conflicts: List[DependencyConflict], container_type: str, image_uri: str) -> bool:
         """Handle one-to-many conflicts by updating the parent package"""
         self.logger.info(f"🔧 Handling one-to-many conflicts for {container_type}")
-        
         # Group by conflicting package
         package_groups = {}
         for conflict in conflicts:
@@ -595,30 +536,23 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
             if pkg not in package_groups:
                 package_groups[pkg] = []
             package_groups[pkg].append(conflict)
-        
         success = True
         for conflicting_package, pkg_conflicts in package_groups.items():
             try:
                 self.logger.info(f"📦 Analyzing {conflicting_package} with {len(pkg_conflicts)} conflicts")
-                
                 # Get the version of the CONFLICTING package from the image package list
                 packages = self.get_package_list_from_image(image_uri)
                 current_version = packages.get(conflicting_package)
-                
                 if not current_version:
                     self.logger.error(f"❌ Could not find {conflicting_package} version in image package list")
                     success = False
                     continue
-                
                 self.logger.info(f"📋 Found {conflicting_package} version: {current_version}")
-                
                 related_packages = [conflict.package for conflict in pkg_conflicts]
                 self.logger.info(f"🔍 Related packages: {related_packages}")
-                
                 # Run compatibility dry runs for both directions
                 less_affected = self.run_compatibility_dry_run(image_uri, conflicting_package, current_version, "<", related_packages)
                 greater_affected = self.run_compatibility_dry_run(image_uri, conflicting_package, current_version, ">", related_packages)
-                
                 # Choose direction that affects fewer packages
                 if less_affected <= greater_affected:
                     constraint = f"<{current_version}"
@@ -639,54 +573,44 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                 else:
                     self.logger.error(f"❌ Failed to add {conflicting_package} {constraint} to Dockerfile")
                     success = False
-                    
             except Exception as e:
                 self.logger.error(f"❌ Failed to handle one-to-many conflict for {conflicting_package}: {e}")
                 success = False
-        
         return success
 
     def handle_platform_conflicts(self, conflicts: List[DependencyConflict], container_type: str) -> bool:
         """Handle platform conflicts by trying < first, then > if rebuild fails"""
         self.logger.info(f"🔧 Handling {len(conflicts)} platform conflicts for {container_type}")
-        
         success = True
         for conflict in conflicts:
             try:
                 package = conflict.package
                 version = conflict.installed_version
-                
                 # Skip if we already failed with this package
                 if package in self.failed_platform_fixes:
                     self.logger.info(f"⚠️ Skipping {package} - already tried both directions")
                     continue
-                
                 # Always try < first
                 constraint = f"<{version}"
                 self.logger.info(f"📦 Trying {package} {constraint} for platform issue")
-                
                 if self.apply_dockerfile_fix(container_type, package, constraint):
                     self.logger.info(f"✅ Added {package} {constraint} to Dockerfile (will verify after rebuild)")
                 else:
                     self.logger.error(f"❌ Failed to add {package} {constraint} to Dockerfile")
                     success = False
-                    
             except Exception as e:
                 self.logger.error(f"❌ Failed to handle platform conflict for {conflict.package}: {e}")
                 success = False
-        
         return success
 
     def handle_failed_platform_conflicts(self, conflicts: List[DependencyConflict], container_type: str) -> bool:
         """Handle platform conflicts that failed with < by trying >"""
         self.logger.info(f"🔧 Handling failed platform conflicts with > constraint for {container_type}")
-        
         success = True
         for conflict in conflicts:
             try:
                 package = conflict.package
                 version = conflict.installed_version
-                
                 # Parse version and increment for > constraint
                 parts = version.split('.')
                 if len(parts) >= 2:
@@ -703,14 +627,11 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                 else:
                     self.logger.error(f"❌ Failed to add {package} {constraint} to Dockerfile")
                     success = False
-                
                 # Mark this package as tried both directions
                 self.failed_platform_fixes.add(package)
-                    
             except Exception as e:
                 self.logger.error(f"❌ Failed to handle failed platform conflict for {conflict.package}: {e}")
                 success = False
-        
         return success
 
     def confirm_rebuild(self) -> bool:
@@ -732,7 +653,7 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
         """Trigger Step 6 rebuild"""
         self.logger.info("🏗️ Triggering rebuild with Step 6...")
         try:
-            from step_6 import Step6Automation
+            from .step_6 import Step6Automation
             step6 = Step6Automation(self.current_version, self.previous_version, self.fork_url)
             return step6.step6_build_upload_docker()
         except Exception as e:
@@ -750,10 +671,8 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
         major_minor = '.'.join(self.current_version.split('.')[:2])
         base_path = self.repo_dir / f"autogluon/{container_type}/docker/{major_minor}/py3"
         paths = {}
-        
         cpu_path = base_path / "Dockerfile.cpu.py_scan_allowlist.json"
         paths['cpu'] = cpu_path
-        
         cuda_dirs = [d for d in base_path.iterdir() if d.is_dir() and d.name.startswith('cu')]
         if cuda_dirs:
             cuda_dir = cuda_dirs[0]  
@@ -761,18 +680,15 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
             paths['gpu'] = gpu_path
         else:
             self.logger.warning(f"⚠️ No CUDA directory found in {base_path}")
-        
         return paths
 
     def load_current_pyscan(self, container_type: str, device_type: str) -> Dict[str, str]:
         """Load current pyscan allowlist for specific container and device type"""
         pyscan_paths = self.get_pyscan_file_paths(container_type)
         pyscan_path = pyscan_paths.get(device_type)
-        
         if not pyscan_path:
             self.logger.warning(f"⚠️ No pyscan path found for {container_type}/{device_type}")
             return {}
-        
         if pyscan_path.exists():
             try:
                 with open(pyscan_path, 'r') as f:
@@ -792,12 +708,9 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
             if not pyscan_path:
                 self.logger.error(f"❌ No pyscan path found for {container_type}/{device_type}")
                 return False
-            
             pyscan_path.parent.mkdir(parents=True, exist_ok=True)
-            
             with open(pyscan_path, 'w') as f:
                 json.dump(allowlist, f, indent=4, sort_keys=True)
-            
             self.logger.info(f"✅ Updated pyscan allowlist: {pyscan_path}")
             return True
         except Exception as e:
@@ -807,35 +720,28 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
     def whitelist_remaining_conflicts(self, conflicts: List[DependencyConflict], container_type: str) -> bool:
         """Whitelist remaining conflicts in pyscan (except platform issues with > constraint)"""
         self.logger.info(f"📝 Whitelisting {len(conflicts)} remaining conflicts for {container_type}")
-        
         success = True
         for device_type in ['cpu', 'gpu']:
             try:
                 current_allowlist = self.load_current_pyscan(container_type, device_type)
                 self.logger.info(f"📋 Current {container_type}/{device_type} pyscan has {len(current_allowlist)} entries")
-                
                 for conflict in conflicts:
                     # Skip platform issues - they should be handled with > constraint
                     if conflict.conflict_type == "platform":
                         self.logger.info(f"⚠️ Skipping platform conflict {conflict.package} from pyscan whitelist")
                         continue
-                    
                     package = conflict.package
                     description = f"Conflict: {conflict.conflicting_package} requires {conflict.required_constraint} but have {conflict.installed_version}"
                     vuln_id = self.generate_vulnerability_id(package, description)
                     pyscan_entry = f"{package} - {description}"
-                    
                     current_allowlist[vuln_id] = pyscan_entry
                     self.logger.info(f"📝 Added {container_type}/{device_type} pyscan entry: {vuln_id}: {pyscan_entry}")
-                
                 device_success = self.save_pyscan_allowlist(container_type, device_type, current_allowlist)
                 if not device_success:
                     success = False
-                    
             except Exception as e:
                 self.logger.error(f"❌ Failed to whitelist conflicts for {container_type}/{device_type}: {e}")
                 success = False
-        
         return success
 
     def get_latest_ecr_images(self) -> Dict[str, List[str]]:
@@ -843,14 +749,11 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
         self.logger.info("🔍 Getting latest ECR images...")
         account_id = os.environ.get('ACCOUNT_ID')
         region = os.environ.get('REGION', 'us-east-1')
-        
         if not account_id:
             raise ValueError("ACCOUNT_ID environment variable not set")
-        
         ecr_client = boto3.client('ecr', region_name=region)
         repositories = ['beta-autogluon-training', 'beta-autogluon-inference']
         latest_images = {}
-        
         for repo in repositories:
             try:
                 response = ecr_client.describe_images(
@@ -862,21 +765,17 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                     key=lambda x: x['imagePushedAt'], 
                     reverse=True
                 )
-                
                 latest_tags = []
                 for image in images[:2]:
                     if 'imageTags' in image:
                         tag = image['imageTags'][0]
                         image_uri = f"{account_id}.dkr.ecr.{region}.amazonaws.com/{repo}:{tag}"
                         latest_tags.append(image_uri)
-                
                 latest_images[repo] = latest_tags
                 self.logger.info(f"📦 {repo}: {latest_tags}")
-                
             except Exception as e:
                 self.logger.error(f"❌ Failed to get images from {repo}: {e}")
                 latest_images[repo] = []
-        
         return latest_images
 
     def parse_version_range(self, version: str) -> str:
@@ -960,9 +859,9 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
             
             # Insert the package version update
             if needs_backslash:
-                new_line = f" && pip install --no-cache-dir -U \"{package}{version_range}\" \\"
+                new_line = f" && pip install --no-cache-dir \"{package}{version_range}\" \\"
             else:
-                new_line = f" && pip install --no-cache-dir -U \"{package}{version_range}\""
+                new_line = f" && pip install --no-cache-dir \"{package}{version_range}\""
             
             lines.insert(insert_index, new_line)
             
@@ -1032,22 +931,18 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                     image_packages['inference_cpu'], 
                     'cpu'
                 )
-                
                 # Update BOTH training AND inference CPU Dockerfiles with the same version range
                 for mismatch in cpu_mismatches:
                     target_range = mismatch['target_range']
                     package = mismatch['package']
-                    
                     # Update training CPU
                     training_success = self.update_dockerfile_with_version_range(
                         'training', 'cpu', package, target_range
                     )
-                    
                     # Update inference CPU with the same range
                     inference_success = self.update_dockerfile_with_version_range(
                         'inference', 'cpu', package, target_range
                     )
-                    
                     if training_success and inference_success:
                         self.logger.info(f"✅ Updated both training and inference CPU for {package}={target_range}")
                     elif training_success:
@@ -1056,7 +951,6 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                         self.logger.warning(f"⚠️ Updated inference CPU but failed training CPU for {package}")
                     else:
                         self.logger.error(f"❌ Failed to update both training and inference CPU for {package}")
-            
             # Compare GPU versions (training vs inference) and update BOTH
             if 'training_gpu' in image_packages and 'inference_gpu' in image_packages:
                 gpu_mismatches = self.compare_package_versions(
@@ -1064,22 +958,18 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                     image_packages['inference_gpu'], 
                     'gpu'
                 )
-                
                 # Update BOTH training AND inference GPU Dockerfiles with the same version range
                 for mismatch in gpu_mismatches:
                     target_range = mismatch['target_range']
                     package = mismatch['package']
-                    
                     # Update training GPU
                     training_success = self.update_dockerfile_with_version_range(
                         'training', 'gpu', package, target_range
                     )
-                    
                     # Update inference GPU with the same range
                     inference_success = self.update_dockerfile_with_version_range(
                         'inference', 'gpu', package, target_range
                     )
-                    
                     if training_success and inference_success:
                         self.logger.info(f"✅ Updated both training and inference GPU for {package}={target_range}")
                     elif training_success:
@@ -1099,39 +989,41 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
     def get_package_list_from_image(self, image_uri: str) -> Dict[str, str]:
         """Get pip list output from Docker image and return package->version dict"""
         self.logger.info(f"📋 Getting package list from {image_uri}")
-        
+        timeout = 300  # 5 minute timeout for pip list
         methods = [
             {
-                "name": "Method 1: Direct pip list",
+                "name": "Method 1: Bash script approach",
+                "cmd": ["docker", "run", "--rm", "--entrypoint", "bash", image_uri, 
+                       "-c", "pip freeze > /tmp/packages.txt && cat /tmp/packages.txt"]
+            },
+            {
+                "name": "Method 2: Direct pip list",
                 "cmd": ["docker", "run", "--rm", image_uri, "pip", "list", "--format=freeze"]
             },
             {
-                "name": "Method 2: Override entrypoint",
+                "name": "Method 3: Override entrypoint",
                 "cmd": ["docker", "run", "--rm", "--entrypoint", "pip", image_uri, "list", "--format=freeze"]
             },
             {
-                "name": "Method 3: Python module approach",
+                "name": "Method 4: Python module approach",
                 "cmd": ["docker", "run", "--rm", image_uri, "python", "-m", "pip", "list", "--format=freeze"]
             }
         ]
-        
         for method in methods:
             try:
-                self.logger.info(f"🧪 Trying {method['name']} (timeout: 300s)")
+                self.logger.info(f"🧪 Trying {method['name']} (timeout: {timeout}s)")
                 result = self.run_subprocess_with_logging(
                     method['cmd'], 
                     capture_output=True, 
                     text=True, 
-                    timeout=300  # 300 second timeout for pip list
+                    timeout=timeout
                 )
-                
                 if result.returncode == 0 and result.stdout.strip():
                     packages = {}
                     for line in result.stdout.strip().split('\n'):
                         if '==' in line:
                             package, version = line.split('==')
                             packages[package.strip()] = version.strip()
-                    
                     self.logger.info(f"✅ Found {len(packages)} packages in {image_uri}")
                     return packages
                 elif result.stdout.strip():
@@ -1148,7 +1040,7 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
                         return packages
                     
             except subprocess.TimeoutExpired:
-                self.logger.warning(f"⏰ {method['name']} timed out after 300s (but may have produced output)")
+                self.logger.warning(f"⏰ {method['name']} timed out after {timeout}s (but may have produced output)")
                 # For inference images that hang but produce output, we could try to get partial output
                 # but subprocess.TimeoutExpired doesn't give us access to partial stdout easily
                 continue
