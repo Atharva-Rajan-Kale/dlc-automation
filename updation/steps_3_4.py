@@ -2,9 +2,9 @@ import os
 import re
 import shutil
 from pathlib import Path
-from typing import Dict, Optional
-from common import BaseAutomation, ECRImageSelector
-from automation_logger import LoggerMixin
+from typing import Dict, Optional, Set, Tuple, List, Any
+from automation.common import BaseAutomation, ECRImageSelector
+from automation.automation_logger import LoggerMixin
 
 class Steps34Automation(BaseAutomation,LoggerMixin):
     """Handles Steps 3 and 4: Docker resources and Buildspec updates"""
@@ -12,8 +12,99 @@ class Steps34Automation(BaseAutomation,LoggerMixin):
     def __init__(self, current_version: str, previous_version: str, fork_url: str):
         super().__init__(current_version, previous_version, fork_url)
         self.selected_images=None
+        self.package_exceptions=None
         self.setup_logging(current_version,custom_name="steps_3_4")
     
+    def _load_package_exceptions(self) -> Dict[str, Any]:
+        """Load package exceptions from exceptions.txt file"""
+        if self.package_exceptions is not None:
+            return self.package_exceptions
+        # Look for exceptions.txt in the same directory as this script
+        script_dir = Path(__file__).parent
+        exceptions_file = script_dir / "exceptions.txt"
+        
+        if not exceptions_file.exists():
+            self.logger.info(f"No exceptions.txt file found at {exceptions_file}, no packages will be preserved after autogluon installation")
+            self.package_exceptions = {'individual_packages': set(), 'training_additions': [], 'inference_additions': []}
+            return self.package_exceptions
+            
+        try:
+            with open(exceptions_file, 'r') as f:
+                lines = f.readlines()
+                
+            individual_packages = set()
+            training_additions = []
+            inference_additions = []
+            current_section = 'individual'
+            
+            for line in lines:
+                stripped_line = line.strip()
+                if not stripped_line or stripped_line.startswith('#'):
+                    if '# TRAINING EXCEPTIONS' in line:
+                        current_section = 'training'
+                        continue
+                    elif '# INFERENCE EXCEPTIONS' in line:
+                        current_section = 'inference'
+                        continue
+                    elif stripped_line.startswith('#'):
+                        continue
+                
+                if current_section == 'individual' and stripped_line:
+                    package_name = stripped_line.split('==')[0].split('>=')[0].split('<=')[0].split('<')[0].split('>')[0].strip()
+                    individual_packages.add(package_name)
+                elif current_section == 'training' and stripped_line:
+                    training_additions.append(line.rstrip() + '\n') 
+                elif current_section == 'inference' and stripped_line:
+                    inference_additions.append(line.rstrip() + '\n')
+                        
+            self.package_exceptions = {
+                'individual_packages': individual_packages,
+                'training_additions': training_additions,
+                'inference_additions': inference_additions
+            }
+            return self.package_exceptions
+            
+        except Exception as e:
+            self.logger.error(f"Error reading {exceptions_file}: {e}")
+            self.package_exceptions = {'individual_packages': set(), 'training_additions': [], 'inference_additions': []}
+            return self.package_exceptions
+    
+    def _extract_package_names_from_line(self, line: str) -> Set[str]:
+        """Extract package names from a pip install line"""
+        packages = set()
+        line_clean = re.sub(r'^\s*&&\s*pip\s+install\s+.*?(?:--no-cache-dir\s+|--trusted-host\s+\S+\s+)*', '', line)
+        line_clean = re.sub(r'^\s*pip\s+install\s+.*?(?:--no-cache-dir\s+|--trusted-host\s+\S+\s+)*', '', line_clean)
+        parts = line_clean.split()
+        for part in parts:
+            part = part.strip().strip('"\'').strip('\\')
+            if part and not part.startswith('-') and part != '&&':
+                package_name = re.split(r'[<>=!]', part)[0].strip()
+                if package_name:
+                    packages.add(package_name)
+        return packages
+    
+    def _should_keep_line_after_autogluon(self, line: str) -> Tuple[bool, bool]:
+        """Check if a line after autogluon installation should be kept based on exceptions
+        Returns: (should_keep, is_last_individual_package)"""
+        stripped_line = line.strip()
+        
+        if 'pip install' not in stripped_line:
+            return True, False
+            
+        package_names = self._extract_package_names_from_line(line)
+        exceptions = self._load_package_exceptions()
+        individual_packages = exceptions['individual_packages']
+        
+        should_keep = bool(package_names.intersection(individual_packages))
+        is_last_individual = False
+        if should_keep:
+            found_packages = package_names.intersection(individual_packages)
+            last_package = max(individual_packages) if individual_packages else None
+            if last_package and last_package in found_packages:
+                is_last_individual = True
+            
+        return should_keep, is_last_individual
+
     def step3_create_docker_resources(self):
         """Step 3: Create new release docker resources"""
         self.logger.info("Step 3: Creating docker resources")
@@ -269,7 +360,6 @@ class Steps34Automation(BaseAutomation,LoggerMixin):
         if not inference_dir.exists():
             self.logger.error(f"Inference directory not found: {inference_dir}")
             return False
-        
         self.logger.info(f"Updating existing directories: {training_dir} and {inference_dir}")
         cuda_num=image_selection['cuda_version'][2:]  
         self.update_dockerfiles_in_directory(training_dir, image_selection, "training", cuda_num)
@@ -289,14 +379,14 @@ class Steps34Automation(BaseAutomation,LoggerMixin):
             return
         cpu_dockerfile=py3_dir / "Dockerfile.cpu"
         if cpu_dockerfile.exists():
-            self.update_single_dockerfile(cpu_dockerfile, cpu_image.image_uri, "CPU")
+            self.update_single_dockerfile(cpu_dockerfile, cpu_image.image_uri, f"{container_type.upper()} CPU")
         else:
             self.logger.warning(f"CPU Dockerfile not found: {cpu_dockerfile}")
         cuda_dir=py3_dir / f"cu{cuda_num}"
         if cuda_dir.exists():
             gpu_dockerfile=cuda_dir / "Dockerfile.gpu"
             if gpu_dockerfile.exists():
-                self.update_single_dockerfile(gpu_dockerfile, gpu_image.image_uri, "GPU")
+                self.update_single_dockerfile(gpu_dockerfile, gpu_image.image_uri, f"{container_type.upper()} GPU")
             else:
                 self.logger.warning(f"GPU Dockerfile not found: {gpu_dockerfile}")
         else:
@@ -307,7 +397,7 @@ class Steps34Automation(BaseAutomation,LoggerMixin):
                 old_cuda_dir.rename(cuda_dir)
                 gpu_dockerfile=cuda_dir / "Dockerfile.gpu"
                 if gpu_dockerfile.exists():
-                    self.update_single_dockerfile(gpu_dockerfile, gpu_image.image_uri, "GPU")
+                    self.update_single_dockerfile(gpu_dockerfile, gpu_image.image_uri, f"{container_type.upper()} GPU")
                 else:
                     self.logger.warning(f"GPU Dockerfile not found after rename: {gpu_dockerfile}")
             else:
@@ -315,105 +405,126 @@ class Steps34Automation(BaseAutomation,LoggerMixin):
 
     def update_single_dockerfile(self, dockerfile_path: Path, new_image_uri: str, image_type: str):
         """Update a single Dockerfile with FROM statement and AUTOGLUON_VERSION, 
-        removing additional dependencies after autogluon installation"""
+        handling additional dependencies after autogluon installation based on exceptions"""
         try:
             with open(dockerfile_path, 'r') as f:
                 lines = f.readlines()
-            
             original_content = ''.join(lines)
             updated_lines = []
             i = 0
             
+            # Determine if this is training or inference based on the path
+            container_type = 'training' if 'training' in str(dockerfile_path) else 'inference'
+            
             while i < len(lines):
                 line = lines[i]
-                
                 # Update FROM statement
                 if line.strip().startswith('FROM '):
                     updated_lines.append(f'FROM {new_image_uri}\n')
                     i += 1
                     continue
-                
                 # Update AUTOGLUON_VERSION
                 if 'AUTOGLUON_VERSION=' in line:
                     line = re.sub(r'AUTOGLUON_VERSION=[\d.]+', f'AUTOGLUON_VERSION={self.current_version}', line)
-                
-                # Handle RUN blocks containing autogluon installation
-                if line.strip().startswith('RUN ') and self._contains_autogluon_install(lines, i):
-                    # Process this RUN block specially
-                    run_block_result = self._process_autogluon_run_block(lines, i)
+                # Handle RUN blocks containing pip install commands
+                if line.strip().startswith('RUN ') and 'pip install' in line:
+                    # Process this RUN block specially, injecting additions if needed
+                    run_block_result = self._process_pip_run_block(lines, i, container_type)
                     updated_lines.extend(run_block_result['processed_lines'])
                     i = run_block_result['next_index']
                     continue
-                
                 updated_lines.append(line)
                 i += 1
-            
             new_content = ''.join(updated_lines)
-            
             if new_content != original_content:
                 with open(dockerfile_path, 'w') as f:
                     f.write(new_content)
                 self.logger.info(f"✅ Updated {image_type} Dockerfile: {dockerfile_path.relative_to(Path('.'))}")
                 self.logger.info(f"   FROM: {new_image_uri}")
                 self.logger.info(f"   AUTOGLUON_VERSION: {self.current_version}")
-                self.logger.info(f"   Removed additional dependencies after autogluon installation")
             else:
                 self.logger.info(f"ℹ️  No changes needed for {dockerfile_path.relative_to(Path('.'))}")
                 
         except Exception as e:
             self.logger.error(f"❌ Failed to update {dockerfile_path}: {e}")
 
-    def _contains_autogluon_install(self, lines, start_index):
-        """Check if a RUN block contains autogluon installation"""
-        i = start_index
-        while i < len(lines):
-            line = lines[i].strip()
-            if 'autogluon==${AUTOGLUON_VERSION}' in line or 'autogluon==' in line:
-                return True
-            if line and not line.startswith('&&') and not line.endswith('\\') and not line.startswith('#') and i > start_index:
-                break
-            i += 1
-        return False
 
-    def _process_autogluon_run_block(self, lines, start_index):
-        """Process a RUN block containing autogluon, keeping only content up to autogluon install"""
+    def _process_pip_run_block(self, lines, start_index, container_type):
+        """Process a RUN block containing pip install commands, injecting additions and handling exceptions"""
         processed_lines = []
         i = start_index
         found_autogluon = False
+        autogluon_line_index = None
+        should_stop_processing = False
         
+        # Get the appropriate additions for this container type
+        exceptions_data = self._load_package_exceptions()
+        if container_type == 'training':
+            additions = exceptions_data['training_additions']
+        else:
+            additions = exceptions_data['inference_additions']
+        
+        # First pass: collect all lines and identify autogluon installation
+        temp_lines = []
         while i < len(lines):
             line = lines[i]
             stripped_line = line.strip()
-            should_add_line = True
-            
             # Check if this line contains the autogluon installation
             if ('autogluon==${AUTOGLUON_VERSION}' in line or 'autogluon==' in line) and 'pip install' in line:
                 found_autogluon = True
-                if line.rstrip().endswith(' \\'):
-                    line = line.rstrip().rstrip('\\').rstrip() + '\n'
-                elif line.rstrip().endswith('\\'):
-                    line = line.rstrip().rstrip('\\') + '\n'
-            
-            # After finding autogluon, skip all subsequent pip install lines and comments until RUN block ends
-            elif found_autogluon:
+                autogluon_line_index = len(temp_lines)
+                temp_lines.append({'line': line, 'keep': True, 'is_autogluon': True})
+            elif found_autogluon and not should_stop_processing:
                 if stripped_line.startswith('#'):
-                    should_add_line = False
-                elif 'pip install' in stripped_line and (stripped_line.startswith('&&') or stripped_line.startswith('# ')):
-                    should_add_line = False
-                elif stripped_line.startswith('&&') and 'pip install' in stripped_line:
-                    should_add_line = False
+                    # Check if this comment precedes a package we want to keep
+                    next_line_idx = i + 1
+                    should_keep_comment = False
+                    if next_line_idx < len(lines):
+                        next_line = lines[next_line_idx]
+                        if 'pip install' in next_line:
+                            should_keep, is_last = self._should_keep_line_after_autogluon(next_line)
+                            should_keep_comment = should_keep
+                    temp_lines.append({'line': line, 'keep': should_keep_comment, 'is_comment': True})
+                elif 'pip install' in stripped_line:
+                    should_keep, is_last_individual = self._should_keep_line_after_autogluon(line)
+                    temp_lines.append({'line': line, 'keep': should_keep, 'is_pip': True})
+                    if is_last_individual:
+                        should_stop_processing = True
+                        self.logger.info("Reached last individual package - stopping processing of subsequent pip install lines")
                 elif (stripped_line and not stripped_line.startswith('&&') and 
-                    not stripped_line.startswith('#') and not stripped_line.endswith('\\') and 
-                    not stripped_line == ''):
-                    processed_lines.append(line)
+                      not stripped_line.startswith('#') and not stripped_line.endswith('\\') and 
+                      not stripped_line == ''):
+                    # End of RUN block
+                    temp_lines.append({'line': line, 'keep': True, 'is_end': True})
                     i += 1
                     break
-            
-            if should_add_line:
-                processed_lines.append(line)
-            
+                else:
+                    temp_lines.append({'line': line, 'keep': True})
+            elif found_autogluon and should_stop_processing:
+                # We've hit the last individual package, skip all subsequent pip install lines
+                if 'pip install' in stripped_line:
+                    self.logger.info(f"Skipping pip install line after last individual package: {stripped_line}")
+                    temp_lines.append({'line': line, 'keep': False, 'is_pip': True})
+                elif stripped_line.startswith('#') and i + 1 < len(lines) and 'pip install' in lines[i + 1]:
+                    # Skip comments that precede pip install lines
+                    self.logger.info(f"Skipping comment before pip install line: {stripped_line}")
+                    temp_lines.append({'line': line, 'keep': False, 'is_comment': True})
+                elif (stripped_line and not stripped_line.startswith('&&') and 
+                      not stripped_line.startswith('#') and not stripped_line.endswith('\\') and 
+                      not stripped_line == ''):
+                    # End of RUN block
+                    temp_lines.append({'line': line, 'keep': True, 'is_end': True})
+                    i += 1
+                    break
+                else:
+                    temp_lines.append({'line': line, 'keep': True})
+            else:
+                temp_lines.append({'line': line, 'keep': True})
+                
             i += 1
-            if found_autogluon and not line.rstrip().endswith('\\'):
+            
+            # Check if we've reached the end of the RUN block
+            if not line.rstrip().endswith('\\'):
                 continue_run_block = False
                 j = i
                 while j < len(lines):
@@ -429,10 +540,38 @@ class Steps34Automation(BaseAutomation,LoggerMixin):
                         break
                     else:
                         break
-                
                 if not continue_run_block:
-                    break
+                    break        
+        if found_autogluon and additions and autogluon_line_index is not None:
+            
+            addition_items = []
+            for addition_line in additions:
+                addition_items.append({'line': addition_line, 'keep': True, 'is_addition': True})
+            temp_lines = (temp_lines[:autogluon_line_index] + 
+                         addition_items + 
+                         temp_lines[autogluon_line_index:])            
+            autogluon_line_index += len(addition_items)
         
+        kept_lines = [item for item in temp_lines if item['keep']]
+        
+        for idx, item in enumerate(kept_lines):
+            line = item['line']
+            is_last_kept = (idx == len(kept_lines) - 1)
+            has_next_kept = (idx < len(kept_lines) - 1)
+            
+            if item.get('is_autogluon', False) or item.get('is_addition', False) or item.get('is_pip', False):
+                line = line.rstrip().rstrip('\\').rstrip() + '\n'
+                if has_next_kept and not item.get('is_end', False):
+                    line = line.rstrip() + ' \\\n'
+            
+            elif item.get('is_end', False):
+                if processed_lines:
+                    last_line = processed_lines[-1]
+                    if last_line.rstrip().endswith('\\'):
+                        processed_lines[-1] = last_line.rstrip().rstrip('\\').rstrip() + '\n'
+            
+            processed_lines.append(line)
+                    
         return {
             'processed_lines': processed_lines,
             'next_index': i

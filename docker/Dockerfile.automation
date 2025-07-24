@@ -21,16 +21,26 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2
     && ./aws/install \
     && rm -rf aws awscliv2.zip
 
+# Configure git for container use
+RUN git config --global user.name "Atharva-Rajan-Kale" \
+    && git config --global user.email "atharvakale912@gmail.com" \
+    && git config --global init.defaultBranch main \
+    && git config --global pull.rebase false
+
 # Copy requirements and install Python dependencies
-COPY requirements_agent.txt .
+COPY docker/requirements_agent.txt .
 RUN pip install -r requirements_agent.txt
 
 # Copy automation scripts
-COPY *.py ./
+COPY automation/*.py ./automation/
+COPY updation/*.py ./updation/
+COPY updation/exceptions.txt ./updation/
+COPY release/*.py ./release/
+COPY testing/*.py ./testing/
 COPY autogluon_test_files/*.py ./autogluon_test_files/
 
 # Create entrypoint script
-COPY entrypoint.sh .
+COPY docker/entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
 ENTRYPOINT ["./entrypoint.sh"]

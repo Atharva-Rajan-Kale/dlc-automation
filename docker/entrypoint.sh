@@ -9,15 +9,15 @@ JOB_PARAMS=${jobParams:-"--complete"}
 
 echo "Starting automation with version: $PREVIOUS_VERSION → $CURRENT_VERSION"
 
-# Run the main automation script
+# Run the main automation script using module syntax
 if [ -n "$JOB_PARAMS" ] && [ "$JOB_PARAMS" != "\$JOB_PARAMS" ]; then
-  python enhanced_main_automation.py \
+  python -m automation.enhanced_main_automation \
     --current-version="$CURRENT_VERSION" \
     --previous-version="$PREVIOUS_VERSION" \
     --fork-url="$FORK_URL" \
     $JOB_PARAMS
 else
-  python enhanced_main_automation.py \
+  python -m automation.enhanced_main_automation \
     --current-version="$CURRENT_VERSION" \
     --previous-version="$PREVIOUS_VERSION" \
     --fork-url="$FORK_URL" \

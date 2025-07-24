@@ -3,8 +3,8 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Dict, Optional
-from common import BaseAutomation, ECRImageSelector
-from automation_logger import LoggerMixin
+from automation.common import BaseAutomation, ECRImageSelector
+from automation.automation_logger import LoggerMixin
 
 class Step8InfrastructureAutomation(BaseAutomation,LoggerMixin):
     """Handles Step 8: Infrastructure deployment after PR merge"""
@@ -255,6 +255,11 @@ class Step8InfrastructureAutomation(BaseAutomation,LoggerMixin):
         """Run the complete infrastructure deployment step"""
         self.logger.info("🏗️ Starting infrastructure deployment step")
         try:
+            print("🚀 Starting Step 8: Infrastructure Deployment...")
+            print(f"📋 Version: {self.previous_version} -> {self.current_version}")
+            print(f"📋 Type: {'Major' if self.is_major_release else 'Minor'} release")
+            print(f"📝 Subprocess logs: {self.automation_logger.get_log_file_path()}")
+            
             if not self.prompt_pr_merged():
                 return False
             if not self.setup_brazil_workspace():
@@ -265,6 +270,14 @@ class Step8InfrastructureAutomation(BaseAutomation,LoggerMixin):
                 return False
             if not self.prompt_cr_merged():
                 return False
+            
+            print("✅ Infrastructure deployment completed successfully!")
+            print("📋 Summary:")
+            print(f"   - Workspace created/synced: {self.infrastructure_dir}")
+            print(f"   - Infrastructure config updated for {self.current_version}")
+            print(f"   - Changes committed and CR submitted for review")
+            print(f"   - CR reviewed and merged")
+            
             self.logger.info("✅ Infrastructure deployment completed successfully")
             return True
         except Exception as e:
@@ -277,3 +290,26 @@ class Step8InfrastructureAutomation(BaseAutomation,LoggerMixin):
         if not steps_only or 8 in steps_only:
             results[8] = self.run_infrastructure_deployment()
         return results
+
+
+def main():
+    """Main function"""
+    import argparse
+    parser = argparse.ArgumentParser(description='Step 8: Infrastructure Deployment Automation')
+    parser.add_argument('--current-version', required=True, help='Current version (e.g., 1.4.0)')
+    parser.add_argument('--previous-version', required=True, help='Previous version (e.g., 1.3.0)')
+    parser.add_argument('--fork-url', required=True, help='Fork URL for the repository')
+    args = parser.parse_args()
+    
+    automation = Step8InfrastructureAutomation(
+        args.current_version,
+        args.previous_version,
+        args.fork_url
+    )
+    
+    success = automation.run_infrastructure_deployment()
+    exit(0 if success else 1)
+
+
+if __name__ == "__main__":
+    main()

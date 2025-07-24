@@ -1,17 +1,17 @@
 import argparse
 import logging
-from steps_1_2_5 import Steps125Automation
-from steps_3_4 import Steps34Automation  
-from step_6 import Step6Automation
-from step_8_infrastructure import Step8InfrastructureAutomation
-from pip_check_agent import PipCheckAgent
-from sagemaker_test_agent import SageMakerTestAgent
-from security_test_agent import SecurityTestAgent
-from github_pr_automation import GitHubPRAutomation
-from quick_checks_agent import QuickChecksAgent
-from autogluon_test_agent import AutoGluonTestAgent
-from autogluon_release_automation import AutoGluonReleaseImagesAutomation
-from asimov_scan_cr import AsimovSecurityScanAutomation
+from updation.steps_1_2_5 import Steps125Automation
+from updation.steps_3_4 import Steps34Automation  
+from updation.step_6 import Step6Automation
+from release.step_8_infrastructure import Step8InfrastructureAutomation
+from updation.pip_check_agent import PipCheckAgent
+from testing.sagemaker_test_agent import SageMakerTestAgent
+from testing.security_test_agent import SecurityTestAgent
+from testing.github_pr_automation import GitHubPRAutomation
+from testing.quick_checks_agent import QuickChecksAgent
+from testing.autogluon_test_agent import AutoGluonTestAgent
+from release.autogluon_release_automation import AutoGluonReleaseImagesAutomation
+from release.asimov_scan_cr import AsimovSecurityScanAutomation
 
 class EnhancedAutoGluonReleaseAutomation:
     """Enhanced orchestrator with complete workflow: Steps 1-7, Infrastructure, Release Images, and Asimov Security Scan"""
@@ -108,62 +108,14 @@ class EnhancedAutoGluonReleaseAutomation:
             return False
     
     def step_7_create_pr_with_complete_workflow(self) -> bool:
-        """Step 7: Complete workflow - PR + Security + Quick Checks + Infrastructure + Release Images + Asimov Scan"""
+        """Step 7: Complete workflow - PR + Security + Quick Checks"""
         self.logger.info("Step 7: Creating PR with complete automation workflow")
         
         # First run the normal PR creation with security and quick checks
         pr_success = self.step_7_create_pr_with_security()
         
         if pr_success:
-            self.logger.info("✅ PR, security analysis, and quick checks completed, proceeding to infrastructure deployment...")
-            
-            # Set up python version info for infrastructure step
-            self.logger.info(f"🔍 DEBUG: About to extract python info, self.selected_images = {self.selected_images}")
-            
-            if self.selected_images:
-                python_info = self.extract_python_version_info()
-                self.logger.info(f"🔍 DEBUG: Extracted python_info = {python_info}")
-                self.step_8.set_python_version_info(python_info)
-                self.logger.info("✅ Python version info passed to Step 8")
-            else:
-                self.logger.warning("⚠️ No selected images available, Step 8 will use default python version")
-                # Still try to set something
-                default_info = {'python_version': 'py311'}
-                self.step_8.set_python_version_info(default_info)
-            
-            # Run infrastructure deployment (Step 8)
-            self.logger.info("🏗️ Running Infrastructure Deployment (Step 8)...")
-            infrastructure_success = self.step_8.run_infrastructure_deployment()
-            self.results[8] = infrastructure_success
-            
-            if infrastructure_success:
-                self.logger.info("✅ Infrastructure deployment completed successfully!")
-                
-                # Run AutoGluon Release Images automation
-                self.logger.info("📦 Running AutoGluon Release Images Automation...")
-                release_images_success = self.autogluon_release_automation.run_release_images_automation()
-                self.results['release_images'] = release_images_success
-                
-                if release_images_success:
-                    self.logger.info("✅ AutoGluon Release Images automation completed successfully!")
-                    
-                    # Run Asimov Security Scan automation
-                    self.logger.info("🔒 Running Asimov Security Scan Automation...")
-                    asimov_success = self.asimov_scan_automation.run_automation()
-                    self.results['asimov_scan'] = asimov_success
-                    
-                    if asimov_success:
-                        self.logger.info("✅ Asimov Security Scan automation completed successfully!")
-                    else:
-                        self.logger.warning("⚠️ Asimov Security Scan automation failed or had issues")
-                        
-                    return pr_success and infrastructure_success and release_images_success and asimov_success
-                else:
-                    self.logger.warning("⚠️ AutoGluon Release Images automation failed, skipping Asimov scan")
-                    return False
-            else:
-                self.logger.warning("⚠️ Infrastructure deployment failed, skipping subsequent steps")
-                return False
+            self.logger.info("✅ PR, security analysis, and quick checks completed")
         else:
             self.logger.error("❌ PR creation failed, skipping all subsequent steps")
             return False
@@ -671,12 +623,6 @@ def main():
     elif args.autogluon_tests:
         print("🧪 Running AutoGluon Test Agent only...")
         success = automation.run_autogluon_tests_only()
-    elif args.agentic_security:
-        print("🤖 Running Agentic Security Analysis...")
-        success = automation.run_agentic_security_only()
-    elif args.agentic_full:
-        print("🤖 Running Full Agentic Testing Suite...")
-        success = automation.run_full_agentic_testing_suite()
     elif args.pr_only:
         print("🚀 Creating Pull Request with complete workflow...")
         success = automation.step_7_create_pr_with_complete_workflow()

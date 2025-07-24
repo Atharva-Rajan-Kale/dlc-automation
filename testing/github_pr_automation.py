@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Optional, Dict, List
 import logging
-from automation_logger import LoggerMixin
+from automation.automation_logger import LoggerMixin
 
 class GitHubPRAutomation(LoggerMixin):
     """Handles automatic PR creation to upstream repository"""
@@ -81,16 +81,30 @@ class GitHubPRAutomation(LoggerMixin):
             return True  
         finally:
             os.chdir(original_dir)
-
+            
     def push_branch_to_fork(self) -> bool:
         """Push the current branch to the fork"""
         self.logger.info(f"🚀 Pushing branch {self.branch_name} to fork...")
         original_dir = os.getcwd()
         try:
             os.chdir(self.repo_dir)
+            
+            # Get GitHub token
+            token = self.get_github_token()
+            if not token:
+                self.logger.error("❌ No GitHub token available for push")
+                return False
+            
+            # Configure git with token
+            if not self.configure_git_with_token(token):
+                self.logger.error("❌ Failed to configure git with token")
+                return False
+            
             self.run_subprocess_with_logging(["git", "checkout", self.branch_name], check=True)
+            
             if not self.format_code_with_black():
                 self.logger.warning("⚠️ Code formatting failed, continuing with push...")
+            
             result = self.run_subprocess_with_logging(
                 ["git", "push", "origin", self.branch_name], 
                 capture_output=True, 
@@ -658,6 +672,65 @@ class GitHubPRAutomation(LoggerMixin):
         else:
             self.logger.error("❌ PR creation failed")
         return success
+    def configure_git_with_token(self, token: str) -> bool:
+        """Configure Git with GitHub token for authentication"""
+        original_dir = os.getcwd()
+        try:
+            os.chdir(self.repo_dir)
+            
+            # Configure git user (required for commits)
+            self.run_subprocess_with_logging(
+                ["git", "config", "user.name", "Atharva-Rajan-Kale"], 
+                capture_output=True
+            )
+            self.run_subprocess_with_logging(
+                ["git", "config", "user.email", "atharvakale912@gmail.com"], 
+                capture_output=True
+            )
+            
+            # Get current remote URL
+            result = self.run_subprocess_with_logging(
+                ["git", "remote", "get-url", "origin"], 
+                capture_output=True, 
+                text=True
+            )
+            current_url = result.stdout.strip()
+            
+            # Configure remote with token
+            if current_url.startswith("https://github.com/"):
+                # Replace with token-authenticated URL
+                authenticated_url = current_url.replace(
+                    "https://github.com/", 
+                    f"https://{token}@github.com/"
+                )
+                self.run_subprocess_with_logging(
+                    ["git", "remote", "set-url", "origin", authenticated_url], 
+                    check=True
+                )
+                self.logger.info("✅ Configured git remote with GitHub token")
+            else:
+                # Add token to existing URL format
+                if "github.com" in current_url:
+                    authenticated_url = current_url.replace(
+                        "github.com", 
+                        f"{token}@github.com"
+                    )
+                    self.run_subprocess_with_logging(
+                        ["git", "remote", "set-url", "origin", authenticated_url], 
+                        check=True
+                    )
+                    self.logger.info("✅ Configured git remote with GitHub token")
+                else:
+                    self.logger.warning(f"⚠️ Unexpected remote URL format: {current_url}")
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to configure git with token: {e}")
+            return False
+        finally:
+            os.chdir(original_dir)
 
 if __name__ == "__main__":
     import argparse
