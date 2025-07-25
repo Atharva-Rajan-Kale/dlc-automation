@@ -1,3 +1,15 @@
+"""
+title : Asimov Security Scan Infrastructure Automation
+
+description : Manages Brazil workspace setup and configuration updates for AsimovImageSecurityScan
+security scanning infrastructure. Handles major version releases by updating images.py
+with new AutoGluon version entries, shifting older versions to maintain scan coverage
+history, and extracting Python path configurations from latest ECR images. Integrates
+with AWS ECR for image metadata extraction and Brazil CR system for code review
+submission. Includes comprehensive workspace synchronization, version detection logic,
+and automated commit workflows. Essential for maintaining security scanning capabilities
+across AutoGluon release cycles and ensuring proper infrastructure deployment.
+"""
 
 import os
 import re

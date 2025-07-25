@@ -1,3 +1,14 @@
+"""
+title : SageMaker Test Automation Agent
+
+description : Testing system that automatically runs SageMaker tests.
+Executes local and remote SageMaker tests with proper IAM setup, analyzes
+and prints out the failures. Handles complex test environments and manages 
+ECR authentication. Features container-specific test routing, timeout management, 
+and detailed reporting of test results across CPU/GPU variants for both training 
+and inference workloads.
+"""
+
 import os
 import re
 import json

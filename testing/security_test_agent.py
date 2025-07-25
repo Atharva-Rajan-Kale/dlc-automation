@@ -1,3 +1,18 @@
+"""
+title : AI-Enhanced Security Vulnerability Resolution Agent
+
+description : Sophisticated automation system for detecting, analyzing, and resolving security
+vulnerabilities using Claude AI via AWS Bedrock with container-specific handling.
+Processes both OS scan (ECR Enhanced) and Python scan (Safety) vulnerabilities,
+applies intelligent Dockerfile fixes with version constraint analysis, and
+falls back to allowlist management when fixes fail. Features comprehensive
+log collection from multiple sources, GraphQL and REST API integration for
+test monitoring, and advanced vulnerability parsing with cross-contamination
+prevention. Includes git automation, AWS CodeBuild integration, and container-
+specific targeting for training/inference images. Essential for maintaining
+security compliance while minimizing manual intervention in release workflows.
+"""
+
 import os
 import re
 import json

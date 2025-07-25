@@ -1,3 +1,15 @@
+"""
+title : Quick Checks Failure Resolution Agent
+
+description : Agent that detects and resolves dlc-pr-quick-checks test failures
+by automatically reverting TOML configuration to full framework builds when
+only quick-checks are failing. Uses advanced test detection via GraphQL and
+REST APIs to analyze PR status, identifies when quick-checks are the sole
+blocker, and applies targeted fixes by undoing step 2 TOML changes. Includes
+comprehensive failure analysis, git operations with authentication, and
+automated monitoring of test completion after fixes.
+"""
+
 import os
 import re
 import json

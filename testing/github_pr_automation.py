@@ -1,3 +1,15 @@
+"""
+title : GitHub Pull Request Automation and Test Monitoring System
+
+description : Comprehensive automation for creating pull requests to upstream repositories with
+advanced test status monitoring via both GraphQL and REST APIs. Handles PR creation,
+reopening closed PRs, code formatting with Black, and intelligent test detection
+including AutoGluon-specific tests. Features real-time test monitoring with stability checks, 
+detailed failure analysis, and comprehensive reporting of test status. Includes authentication
+management and git configuration. Critical component for automating the PR workflow and ensuring
+test completion before proceeding with release processes.
+"""
+
 import os
 import json
 import subprocess

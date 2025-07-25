@@ -1,3 +1,18 @@
+"""
+title : Common Infrastructure and Base Classes for AutoGluon Release Automation
+
+description : Provides shared functionality including AWS ECR image selection, version parsing, and base
+automation infrastructure. Features ECRImageSelector class for intelligent PyTorch container
+image selection from AWS ECR repositories, with automatic parsing of PyTorch versions, CUDA
+versions, and compute types (CPU/GPU) from image tags.
+Implements sophisticated image matching logic to select optimal CPU and GPU image combinations
+with consistent PyTorch and CUDA versions across training and inference containers. Includes
+BaseAutomation class with common version handling, release type detection (major vs minor),
+and workspace directory management. Handles AWS credentials verification, ECR repository
+access, and provides foundation for all automation components with shared logging and
+directory structure setup.
+"""
+
 import os
 import re
 import json
