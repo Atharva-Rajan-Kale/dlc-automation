@@ -654,6 +654,10 @@ def main():
         print("🔧 Running only step 6...")
         results = automation.run_step_6()
         success = all(results.values())
+    elif args.step_6:
+        print("Running steps 1-6")
+        results=automation.run_automation(steps_only=None)
+        success=all(results.values())
     else:
         # Default: run complete automation
         print("🔧 Running complete automation workflow (default)...")
