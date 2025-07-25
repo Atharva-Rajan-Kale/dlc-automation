@@ -1,3 +1,17 @@
+"""
+title : Centralized Logging System for AutoGluon Release Automation
+
+Description : Provides comprehensive logging infrastructure for AutoGluon automation steps with organized
+folder structure and detailed subprocess command tracking. Features auto-detection of step
+names from calling modules, timestamped log files with command execution details, and
+real-time output capture for both captured and streaming subprocess modes.
+Includes AutomationLogger class for standalone logging and LoggerMixin for easy integration
+into existing automation classes. Handles subprocess command logging with working directory
+context, return codes, stdout/stderr capture, and structured step progression tracking.
+Creates organized logs directory structure with step-specific folders and timestamped files
+for comprehensive automation audit trails and debugging support.
+"""
+
 import os
 import subprocess
 import logging

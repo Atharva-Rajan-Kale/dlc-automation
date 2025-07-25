@@ -1,3 +1,16 @@
+"""
+title : Infrastructure Deployment Automation
+
+description : Post-merge infrastructure deployment automation that updates DLContainersInfra
+configuration files after successful PR integration. Sets up Brazil workspace,
+updates public_release.ts with new AutoGluon version configurations, and manages
+version transitions for both major and minor releases. Handles intelligent version
+removal for major releases, python version enum updates, and proper configuration
+formatting. Includes interactive PR merge confirmation and automated code review
+submission via Brazil CR system. Critical final step that ensures infrastructure deployment 
+matches released container versions and maintains proper version lifecycle management.
+"""
+
 import os
 import re
 import subprocess

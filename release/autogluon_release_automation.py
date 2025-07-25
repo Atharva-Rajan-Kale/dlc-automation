@@ -1,3 +1,14 @@
+"""
+title : AutoGluon Release Images and Documentation Automation
+
+description : Comprehensive two-phase automation system for updating release configuration files
+and documentation. Phase 1 updates YAML release_images files with new AutoGluon
+configurations and creates PR for review. Phase 2 reverts YAML changes, updates
+available_images.md documentation with constructed image URLs, and creates combined
+PR for final release. Handles both major and minor releases with intelligent version
+shifting, ECR integration for image metadata extraction, and automated git workflows.
+"""
+
 import os
 import re
 import sys
@@ -161,22 +172,17 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
             else:
                 print("⏳ Waiting for CR process completion...")
 
-    # ... (keeping all other existing methods unchanged for brevity) ...
-
     def run_yaml_only_automation(self):
         """Run only YAML file updates and PR creation"""
         try:
             print("🚀 Starting AutoGluon YAML-Only Release Automation...")
             
-            # Step 0: Setup repository from fork
             print("🔧 Setting up repository from fork...")
             if not self.setup_repository():
                 raise Exception("Failed to setup repository from fork")
             
-            # Step 1: Wait for CR completion
             self.wait_for_cr_completion()
             
-            # Step 2: Extract image information
             print("🔍 Extracting image information for YAML files...")
             print(f"📋 Using environment ACCOUNT_ID for beta repositories")
             image_info = self.get_latest_training_gpu_image()
@@ -188,7 +194,6 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
             print(f"   Python Versions: {image_info['python_versions']}")
             print(f"   CUDA Version: {image_info['cuda_version']}")
             
-            # Step 3: Backup and update YAML files
             self.backup_yaml_files()
             print("📝 Updating release_images files...")
             if not self.update_release_images_files(image_info):
@@ -196,7 +201,6 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
                 
             print("✅ Release images files updated successfully")
             
-            # Step 4: Commit and create PR
             if not self.prompt_user("Commit and create PR with YAML changes?"):
                 print("❌ Operation cancelled by user")
                 return False
@@ -231,12 +235,10 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
         try:
             print("🚀 Starting AutoGluon Revert and Available Images Automation...")
             
-            # Step 0: Setup repository from fork
             print("🔧 Setting up repository from fork...")
             if not self.setup_repository():
                 raise Exception("Failed to setup repository from fork")
             
-            # Step 1: Extract image information (needed for constructing URLs)
             print("🔍 Extracting image information for available_images.md...")
             image_info = self.get_latest_training_gpu_image()
             if not image_info:
@@ -244,23 +246,19 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
                 
             print(f"📦 Using image info from {image_info['tag']} for URL construction")
             
-            # Step 2: Backup files
             self.backup_yaml_files()
             self.backup_available_images_file()
             
-            # Step 3: Revert YAML files
             print("🔄 Reverting YAML changes...")
             if not self.revert_yaml_files():
                 raise Exception("Failed to revert YAML files")
             print("✅ YAML files reverted successfully")
             
-            # Step 4: Construct image URLs and update available_images.md
             print("📝 Starting available_images.md update process...")
             print("🔧 Constructing image URLs using specified pattern...")
             print(f"📋 Using production account ID: {self.PRODUCTION_ACCOUNT_ID}")
             print(f"📋 Using region: {os.environ.get('REGION', self.DEFAULT_REGION)}")
             
-            # Construct URLs using the pattern instead of fetching from repositories
             constructed_images = self.construct_image_urls_by_type(image_info)
             training_images = constructed_images['training']
             inference_images = constructed_images['inference']
@@ -281,7 +279,6 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
                 raise Exception("Failed to update available_images.md")
             print("✅ available_images.md updated successfully with constructed image URLs")
             
-            # Step 5: Commit both changes (revert + available_images.md update) in single commit
             if not self.prompt_user("Commit and create PR with both YAML revert and available_images.md changes?"):
                 print("❌ Operation cancelled by user")
                 return False
@@ -315,13 +312,10 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
             original_dir = os.getcwd()
             os.chdir(self.repo_dir)
             
-            # Add both YAML files and available_images.md
             self.run_subprocess_with_logging(['git', 'add', 'release_images_training.yml', 'release_images_inference.yml', 'available_images.md'], check=True)
             
-            # Commit both changes together
             self.run_subprocess_with_logging(['git', 'commit', '-m', commit_message], check=True)
             
-            # Push changes
             branch_name = f"autogluon-{self.current_version}-release"
             self.run_subprocess_with_logging(['git', 'push', 'origin', branch_name], check=True)
             self.logger.info(f"✅ Combined changes committed and pushed: {commit_message}")
@@ -338,9 +332,6 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
             return self.run_yaml_only_automation()
         else:
             return self.run_revert_and_available_images_automation()
-
-    # Add all the other existing methods here (get_latest_autogluon_images_by_type, construct_image_urls_by_type, etc.)
-    # ... (keeping all other methods from the original code) ...
 
     def get_latest_autogluon_images_by_type(self, repo_name: str, account_id: str = None) -> Dict[str, Dict]:
         """Get the latest GPU and CPU images from autogluon repository"""
@@ -404,7 +395,6 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
         region = os.environ.get('REGION', self.DEFAULT_REGION)
         account_id = self.PRODUCTION_ACCOUNT_ID
         
-        # Extract version info from reference image
         python_version = reference_image_info['python_versions'][0]
         cuda_version = reference_image_info['cuda_version']
         os_version = reference_image_info['os_version']
@@ -416,7 +406,6 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
             'inference': {}
         }
         
-        # Construct URLs for training and inference, both GPU and CPU
         for job_type in ['training', 'inference']:
             # GPU image
             gpu_tag = f"{self.current_version}-gpu-{python_version}-{cuda_version}-{os_version}"

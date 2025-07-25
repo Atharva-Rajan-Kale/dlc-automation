@@ -1,3 +1,14 @@
+"""
+title : Repository Setup and Model Packaging Automation
+
+description : Manages initial repository setup, configuration updates, and model packaging for AutoGluon release automation. 
+Step 1 creates release branches and syncs with upstream,
+Step 2 updates TOML configuration for AutoGluon-only builds, and Step 5 trains and
+packages a test model. Handles git operations, branch management, configuration file updates, and model training. 
+Critical foundation steps that prepare the repository and resources needed for
+subsequent Docker building and testing phases of the release process.
+"""
+
 import os
 import re
 import shutil

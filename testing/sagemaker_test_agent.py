@@ -1,3 +1,14 @@
+"""
+title : SageMaker Test Automation Agent
+
+description : Testing system that automatically runs SageMaker tests.
+Executes local and remote SageMaker tests with proper IAM setup, analyzes
+and prints out the failures. Handles complex test environments and manages 
+ECR authentication. Features container-specific test routing, timeout management, 
+and detailed reporting of test results across CPU/GPU variants for both training 
+and inference workloads.
+"""
+
 import os
 import re
 import json
@@ -8,142 +19,58 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 import boto3
 
-from langchain_aws import ChatBedrock
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import JsonOutputParser
-from pydantic import BaseModel, Field
-
 from automation.common import BaseAutomation, ECRImageSelector
 from automation.automation_logger import LoggerMixin
-@dataclass
-class TestError:
-    error_type:str
-    error_message:str
-    test_file:str
-    line_number:Optional[str]
-    full_traceback:str
-
-class TestFixPlan(BaseModel):
-    errors:List[Dict]=Field(description="List of test errors found")
-    code_fixes:List[Dict]=Field(description="Code fixes to apply")
-    config_fixes:List[Dict]=Field(description="Configuration fixes to apply")
-    dependency_fixes:List[Dict]=Field(description="Dependency fixes to apply")
-    retry_strategy:str=Field(description="Strategy for retrying tests")
-    estimated_success_rate:int=Field(description="Estimated success rate after fixes (0-100)")
 
 class SageMakerTestAgent(BaseAutomation,LoggerMixin):
-    """Agentic system for automatically running and fixing SageMaker tests"""
+    """Test runner for SageMaker tests"""
     
     def __init__(self, current_version:str, previous_version:str, fork_url:str):
         super().__init__(current_version, previous_version, fork_url)
-        self.setup_bedrock_client()
-        self.setup_langchain()
         self.test_results={}
         self.setup_logging(current_version,custom_name="sagemaker")
 
-    def setup_bedrock_client(self):
-        """Initialize Bedrock client"""
-        self.bedrock_client=boto3.client(
-            'bedrock-runtime',
-            region_name=os.getenv('REGION', 'us-east-1')
-        )
-        
-    def setup_langchain(self):
-        """Initialize LangChain with Claude via Bedrock"""
-        model_id=os.getenv('BEDROCK_MODEL_ID', 'anthropic.claude-3-5-sonnet-20241022-v2:0')
-        inference_profile_arn=os.getenv('BEDROCK_INFERENCE_PROFILE_ARN')
-        models_to_try=[inference_profile_arn] if inference_profile_arn else []
-        models_to_try.extend([
-            model_id,
-            "anthropic.claude-3-sonnet-20240229-v1:0",
-            "anthropic.claude-3-haiku-20240307-v1:0"
-        ])
-        for model in models_to_try:
-            if not model:
-                continue
-            try:
-                self.llm=ChatBedrock(
-                    client=self.bedrock_client,
-                    model_id=model,
-                    provider="anthropic" if inference_profile_arn and model == inference_profile_arn else None,
-                    model_kwargs={"max_tokens":4000, "temperature":0.1, "top_p":0.9}
-                )
-                self.logger.info(f"✅ Initialized Bedrock with {model}")
-                break
-            except Exception as e:
-                self.logger.warning(f"⚠️ Failed to initialize {model}:{e}")
-                continue
-        else:
-            raise Exception("Failed to initialize any Bedrock model")
-        self.analysis_prompt=ChatPromptTemplate.from_messages([
-            ("system", """You are an expert DevOps engineer specializing in SageMaker testing and AutoGluon.
-
-            Analyze SageMaker test failures and create fix plans to resolve ERRORS (ignore warnings).
-
-            Return ONLY valid JSON with this structure:
-            {{
-              "errors":[{{"package":"module_name", "description":"brief error description"}}],
-              "code_fixes":[{{"type":"modify_file", "file_path":"path/to/file", "changes":"description", "new_content":"full file content"}}],
-              "config_fixes":[{{"type":"config_change", "setting":"SETTING_NAME", "value":"new_value", "description":"why"}}],
-              "dependency_fixes":[{{"type":"dependency", "action":"install", "package":"package_name", "version":"version"}}],
-              "retry_strategy":"modified",
-              "estimated_success_rate":85
-            }}"""),
-            ("human", """Analyze this SageMaker test failure:
-
-            Container:{container_type}, Tag:{image_tag}, Framework:{framework_version}
-            Test Directory:{test_directory}
-            Test Type:{test_type}
-
-            Errors:
-            {test_output}
-
-            Return JSON fix plan.""")
-        ])
-        
-        self.parser=JsonOutputParser(pydantic_object=TestFixPlan)
-        self.chain=self.analysis_prompt | self.llm | self.parser
-
     def get_latest_ecr_images(self) -> Dict[str, List[str]]:
-        """Get latest CPU and GPU images from beta-autogluon repositories"""
+        """Get latest CPU and GPU images from the repository """
         account_id=os.environ.get('ACCOUNT_ID')
         region=os.environ.get('REGION', 'us-east-1')
         if not account_id:
             raise ValueError("ACCOUNT_ID environment variable not set")
         ecr_client=boto3.client('ecr', region_name=region)
-        repositories=['beta-autogluon-training', 'beta-autogluon-inference']
-        latest_images={}
         
-        for repo in repositories:
-            try:
-                response=ecr_client.describe_images(repositoryName=repo, maxResults=100)
-                images=sorted(response['imageDetails'], key=lambda x:x['imagePushedAt'], reverse=True)
-                
-                latest_images[repo] = []
-                cpu_found = False
-                gpu_found = False
-                for image in images:
-                    if 'imageTags' in image:
-                        tag = image['imageTags'][0]
-                        image_uri = f"{account_id}.dkr.ecr.{region}.amazonaws.com/{repo}:{tag}"
-                        # Get latest CPU image
-                        if '-cpu-' in tag and not cpu_found:
-                            latest_images[repo].append(image_uri)
-                            cpu_found = True
-                            self.logger.info(f"📦 {repo} CPU: {tag}")
-                        # Get latest GPU image
-                        elif '-gpu-' in tag and not gpu_found:
-                            latest_images[repo].append(image_uri)
-                            gpu_found = True
-                            self.logger.info(f"📦 {repo} GPU: {tag}")
-                        # Break if we found both CPU and GPU images
-                        if cpu_found and gpu_found:
-                            break
-                if not latest_images[repo]:
-                    self.logger.warning(f"⚠️ No CPU or GPU images found in {repo}")
-            except Exception as e:
-                self.logger.error(f"❌ Failed to get images from {repo}: {e}")
-                latest_images[repo] = []
+        repo = 'beta-autogluon-inference'
+        latest_images = {}
+        
+        try:
+            response=ecr_client.describe_images(repositoryName=repo, maxResults=100)
+            images=sorted(response['imageDetails'], key=lambda x:x['imagePushedAt'], reverse=True)
+            
+            latest_images[repo] = []
+            cpu_found = False
+            gpu_found = False
+            for image in images:
+                if 'imageTags' in image:
+                    tag = image['imageTags'][0]
+                    image_uri = f"{account_id}.dkr.ecr.{region}.amazonaws.com/{repo}:{tag}"
+                    # Get latest CPU image
+                    if '-cpu-' in tag and not cpu_found:
+                        latest_images[repo].append(image_uri)
+                        cpu_found = True
+                        self.logger.info(f"📦 {repo} CPU: {tag}")
+                    # Get latest GPU image
+                    elif '-gpu-' in tag and not gpu_found:
+                        latest_images[repo].append(image_uri)
+                        gpu_found = True
+                        self.logger.info(f"📦 {repo} GPU: {tag}")
+                    # Break if we found both CPU and GPU images
+                    if cpu_found and gpu_found:
+                        break
+            if not latest_images[repo]:
+                self.logger.warning(f"⚠️ No CPU or GPU images found in {repo}")
+        except Exception as e:
+            self.logger.error(f"❌ Failed to get images from {repo}: {e}")
+            latest_images[repo] = []
+        
         return latest_images
 
     def setup_iam_permissions(self) -> bool:
@@ -200,9 +127,9 @@ class SageMakerTestAgent(BaseAutomation,LoggerMixin):
             self.logger.warning(f"⚠️ IAM setup failed:{e}")
             return True
 
-    def setup_test_environment(self, container_type:str) -> bool:
-        """Setup test environment"""
-        test_dir=self.repo_dir / f"test/sagemaker_tests/autogluon/{container_type}"
+    def setup_test_environment(self) -> bool:
+        """Setup test environment for inference container"""
+        test_dir=self.repo_dir / f"test/sagemaker_tests/autogluon/inference"
         try:
             self.setup_iam_permissions()
             os.environ['PYTHONPATH']=str(self.repo_dir / "src")
@@ -213,7 +140,7 @@ class SageMakerTestAgent(BaseAutomation,LoggerMixin):
             os.chdir(test_dir)
             if Path("requirements.txt").exists():
                 self.run_subprocess_with_logging(["pip3", "install", "-r", "requirements.txt"], check=True)
-            self.logger.info(f"✅ Setup complete for {container_type}")
+            self.logger.info(f"✅ Setup complete for inference")
             return True
         except Exception as e:
             self.logger.error(f"❌ Setup failed:{e}")
@@ -257,33 +184,23 @@ class SageMakerTestAgent(BaseAutomation,LoggerMixin):
         except Exception as e:
             return False, f"{test_type.upper()} test execution error: {str(e)}"
 
-    def run_sagemaker_test(self, image_uri: str, container_type: str) -> Tuple[bool, str]:
-        """Run tests for a specific image based on container type"""
+    def run_sagemaker_test(self, image_uri: str) -> Tuple[bool, str]:
+        """Run tests for a specific inference image (both local and sagemaker tests)"""
         all_outputs = []
         all_success = True
         tag = image_uri.split(':')[-1]
         processor = "CPU" if '-cpu-' in tag else "GPU"
-        
-        # Determine which test types to run based on container type
-        if container_type == "training":
-            # Training images: only run sagemaker tests
-            test_types = ["sagemaker"]
-        else:
-            # Inference images: run both local and sagemaker tests
-            test_types = ["local", "sagemaker"]
-        
+        # run both local and sagemaker tests
+        test_types = ["local", "sagemaker"]
         for test_type in test_types:
             self.logger.info(f"🎯 Running {test_type.upper()} tests ({processor}): {tag}")
-            success, output = self.run_single_test_suite(image_uri, container_type, test_type)
-            
+            success, output = self.run_single_test_suite(image_uri, "inference", test_type)
             all_outputs.append(f"\n--- {test_type.upper()} TEST RESULTS ({processor}) ---\n{output}")
-            
             if not success:
                 all_success = False
                 self.logger.error(f"❌ {test_type.upper()} tests failed ({processor}): {tag}")
             else:
                 self.logger.info(f"✅ {test_type.upper()} tests passed ({processor}): {tag}")
-        
         combined_output = "\n".join(all_outputs)
         return all_success, combined_output
 
@@ -302,134 +219,74 @@ class SageMakerTestAgent(BaseAutomation,LoggerMixin):
                 error_lines.append(line)
         return '\n'.join(error_lines)
 
-    def apply_fixes(self, fix_plan:Dict, test_directory:str) -> bool:
-        """Apply all fixes from Claude's plan"""
-        fixes_applied=False
-        for fix in fix_plan.get('code_fixes', []):
-            if fix.get('type') == 'modify_file':
-                file_path=Path(test_directory) / fix.get('file_path', '')
-                if not file_path.exists() and 'src/' in fix.get('file_path', ''):
-                    file_path=self.repo_dir / fix.get('file_path', '')
-                if file_path.exists():
-                    file_path.rename(file_path.with_suffix(file_path.suffix + '.backup'))
-                    with open(file_path, 'w') as f:
-                        f.write(fix.get('new_content', ''))
-                    fixes_applied=True
-                    self.logger.info(f"✅ Modified:{file_path.name}")
-        for fix in fix_plan.get('config_fixes', []):
-            if fix.get('type') == 'config_change':
-                os.environ[fix.get('setting', '')]=fix.get('value', '')
-                fixes_applied=True
-                self.logger.info(f"✅ Set {fix.get('setting')}")
-        for fix in fix_plan.get('dependency_fixes', []):
-            if fix.get('type') == 'dependency':
-                package=fix.get('package', '')
-                version=fix.get('version', '')
-                package_spec=package if version in ['latest', ''] else f"{package}=={version}"
-                try:
-                    self.run_subprocess_with_logging(["pip3", "install", package_spec], check=True)
-                    fixes_applied=True
-                    self.logger.info(f"✅ Installed:{package}")
-                except subprocess.CalledProcessError:
-                    self.logger.warning(f"⚠️ Could not install:{package}")
-        return fixes_applied
-
     def run_sagemaker_test_agent(self) -> bool:
-        """Main agent execution loop for SageMaker tests"""
-        self.logger.info("🤖 Starting SageMaker Test Agent...")
+        """Main execution loop for SageMaker inference tests (error reporting only)"""
         original_dir=os.getcwd()
         try:
             latest_images=self.get_latest_ecr_images()
             overall_success=True
+            # Setup test environment for inference
+            if not self.setup_test_environment():
+                return False
+            # Process inference images
             for repo, images in latest_images.items():
-                container_type='training' if 'training' in repo else 'inference'
-                if not self.setup_test_environment(container_type):
-                    overall_success=False
-                    continue
                 for image_uri in images:
                     tag = image_uri.split(':')[-1]
                     processor = "CPU" if '-cpu-' in tag else "GPU"
-                    test_info = "SageMaker only" if container_type == "training" else "Local + SageMaker"
-                    self.logger.info(f"🎯 Testing {processor} {container_type} ({test_info}): {tag}")
-                    max_retries=3
-                    test_passed=False
-                    for retry in range(max_retries):
-                        success, output=self.run_sagemaker_test(image_uri, container_type)
-                        if success:
-                            test_passed=True
-                            break
-                        error_output=self.filter_errors_only(output)
-                        if not error_output.strip():
-                            test_passed=True  
-                            break
-                        self.logger.info(f"❌ Found errors (attempt {retry + 1}/{max_retries})")
-                        try:
-                            tag_info={"tag":image_uri.split(':')[-1]}
-                            # Determine test type description for Claude
-                            test_type_desc = "sagemaker" if container_type == "training" else "local and sagemaker"
-                            fix_plan=self.chain.invoke({
-                                "container_type":container_type,
-                                "image_tag":tag_info['tag'],
-                                "framework_version":self.current_version,
-                                "test_output":error_output,
-                                "test_directory":os.getcwd(),
-                                "test_type":test_type_desc
-                            })
-                            if self.apply_fixes(fix_plan, os.getcwd()):
-                                self.logger.info(f"✅ Applied Claude's fixes, retrying...")
-                                continue
-                            else:
-                                self.logger.warning("⚠️ No fixes applied")
-                                break
-                        except Exception as e:
-                            self.logger.error(f"❌ Claude analysis failed:{e}")
-                            break
-                    if not test_passed:
-                        overall_success=False
-                    self.test_results[image_uri]=test_passed
-                os.chdir(original_dir)
+                    self.logger.info(f"🎯 Testing {processor} inference (Local + SageMaker): {tag}")
+                    # Run test once
+                    success, output = self.run_sagemaker_test(image_uri)
+                    if success:
+                        self.logger.info(f"✅ All tests passed for {tag}")
+                    else:
+                        self.logger.error(f"❌ Tests failed for {tag}")
+                        # Filter and display errors only
+                        error_output = self.filter_errors_only(output)
+                        if error_output.strip():
+                            self.logger.error("🔥 ERROR OUTPUT:")
+                            self.logger.error(error_output)
+                        else:
+                            self.logger.info("ℹ️ No significant errors found after filtering")
+                        
+                        overall_success = False
+                    
+                    self.test_results[image_uri] = success
+                    
             self.print_test_summary()
             return overall_success
         except Exception as e:
-            self.logger.error(f"❌ SageMaker Test Agent failed:{e}")
+            self.logger.error(f"❌ SageMaker Test Agent failed: {e}")
             return False
         finally:
             os.chdir(original_dir)
 
     def print_test_summary(self):
-        """Print test execution summary"""
+        """Print test execution summary for inference images only"""
         print("\n" + "="*70)
-        print("🧪 SAGEMAKER TEST AGENT SUMMARY")
+        print("🧪 SAGEMAKER TEST SUMMARY")
         print("="*70)
         passed=[uri for uri, passed in self.test_results.items() if passed]
         failed=[uri for uri, passed in self.test_results.items() if not passed]
         
-        # Separate by container type and processor
-        training_cpu_passed = [uri for uri in passed if 'training' in uri and '-cpu-' in uri]
-        training_gpu_passed = [uri for uri in passed if 'training' in uri and '-gpu-' in uri]
-        inference_cpu_passed = [uri for uri in passed if 'inference' in uri and '-cpu-' in uri]
-        inference_gpu_passed = [uri for uri in passed if 'inference' in uri and '-gpu-' in uri]
-        
-        training_cpu_failed = [uri for uri in failed if 'training' in uri and '-cpu-' in uri]
-        training_gpu_failed = [uri for uri in failed if 'training' in uri and '-gpu-' in uri]
-        inference_cpu_failed = [uri for uri in failed if 'inference' in uri and '-cpu-' in uri]
-        inference_gpu_failed = [uri for uri in failed if 'inference' in uri and '-gpu-' in uri]
+        # Separate by processor type (all are inference)
+        inference_cpu_passed = [uri for uri in passed if '-cpu-' in uri]
+        inference_gpu_passed = [uri for uri in passed if '-gpu-' in uri]
+        inference_cpu_failed = [uri for uri in failed if '-cpu-' in uri]
+        inference_gpu_failed = [uri for uri in failed if '-gpu-' in uri]
         
         print(f"📊 Total: {len(self.test_results)} | ✅ Passed: {len(passed)} | ❌ Failed: {len(failed)}")
-        print(f"   🏋️  Training - CPU: {len(training_cpu_passed)}✅/{len(training_cpu_failed)}❌ | GPU: {len(training_gpu_passed)}✅/{len(training_gpu_failed)}❌")
-        print(f"   🔍 Inference - CPU: {len(inference_cpu_passed)}✅/{len(inference_cpu_failed)}❌ | GPU: {len(inference_gpu_passed)}✅/{len(inference_gpu_failed)}❌")
+        print(f"CPU: {len(inference_cpu_passed)}✅/{len(inference_cpu_failed)}❌ | GPU: {len(inference_gpu_passed)}✅/{len(inference_gpu_failed)}❌")
         
         if failed:
             print("\n❌ Failed tests:")
             for uri in failed:
                 processor = "CPU" if '-cpu-' in uri else "GPU"
-                container = "Training" if 'training' in uri else "Inference"
-                print(f"   - [{container} {processor}] {uri.split('/')[-1]}")
+                print(f"   - [Inference {processor}] {uri.split('/')[-1]}")
         print("="*70)
 
 def main():
     import argparse
-    parser=argparse.ArgumentParser(description='SageMaker Test Agent')
+    parser=argparse.ArgumentParser(description='SageMaker Inference Test Agent (Error Reporting Only)')
     parser.add_argument('--current-version', required=True)
     parser.add_argument('--previous-version', required=True)
     parser.add_argument('--fork-url', required=True)
@@ -439,4 +296,4 @@ def main():
     exit(0 if success else 1)
 
 if __name__ == "__main__":
-    main()
+    main()  

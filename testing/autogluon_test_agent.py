@@ -1,3 +1,14 @@
+"""
+title : AutoGluon Functionality Test Agent
+
+description : Simple containerized test runner that executes AutoGluon functionality tests
+on the most recent training CPU image from ECR. Runs tabular, AutoMM, and time series tests 
+in isolated Docker containers with proper resource allocation and timeout handling. 
+Validates test files, manages container lifecycle, and provides comprehensive test execution 
+summaries. Essential for ensuring AutoGluon components work correctly in containerized
+environments before proceeding with more extensive testing workflows.
+"""
+
 import os
 import logging
 import subprocess

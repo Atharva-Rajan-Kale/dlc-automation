@@ -1,3 +1,16 @@
+"""
+title : Docker Build and ECR Upload Automation
+
+description : Handles the complete Docker image building and uploading workflow for AutoGluon
+containers. Fixes known code issues, sets up build environment with ECR authentication,
+and builds all image variants (training/inference × CPU/GPU) with real-time output
+streaming. Manages Python virtual environment setup, dependency installation,
+and proper cleanup of build artifacts. Includes comprehensive error handling,
+timeout management, and validation of required environment variables. Essential
+final step that produces the actual Docker images ready for testing and deployment
+to AWS ECR repositories for both beta-autogluon-training and beta-autogluon-inference.
+"""
+
 import os
 import re
 import shutil
@@ -15,9 +28,7 @@ class Step6Automation(BaseAutomation, LoggerMixin):
         self.setup_logging(current_version, custom_name="step_6")
         
     def cleanup_build_artifacts(self):
-        """Clean up docker build artifacts and unwanted files"""
-        self.logger.info("🗑️ Cleaning up build artifacts...")
-        
+        """Clean up docker build artifacts and unwanted files"""        
         try:
             removed_count = 0            
             specific_files = [

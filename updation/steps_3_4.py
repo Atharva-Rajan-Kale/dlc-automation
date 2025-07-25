@@ -1,3 +1,13 @@
+"""
+title : Docker Resources and Buildspec Configuration Management
+
+description : Manages Docker directory structures, Dockerfile updates, and buildspec configuration for AutoGluon releases. 
+Handles both major version migrations (creating new directories) and minor version updates (updating in-place). 
+Selects optimal ECR base images, extracts version information, and updates all Dockerfiles with new
+base images and dependency management. Updates buildspec.yml files with version numbers, Python/CUDA/OS information, and test
+configuration. Essential for maintaining proper Docker image inheritance and
+ensuring consistent build configuration across training and inference containers.
+"""
 import os
 import re
 import shutil

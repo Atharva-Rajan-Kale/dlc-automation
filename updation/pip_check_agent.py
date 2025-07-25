@@ -1,3 +1,16 @@
+"""
+title : AI-Powered Pip Dependency Conflict Resolution Agent
+
+description : Intelligent automation system for detecting, analyzing, and resolving pip dependency
+conflicts in Docker images using Claude AI via AWS Bedrock. Categorizes conflicts
+into one-to-one, one-to-many, and platform issues, then applies strategic fixes
+including package version updates, compatibility dry-runs, and synchronization
+between training/inference containers. Uses advanced conflict parsing with natural
+language processing, performs impact analysis before changes, and automatically
+rebuilds images when needed. Handles remaining conflicts through security scan
+whitelisting, ensuring robust dependency management across AutoGluon containers.
+"""
+
 import os
 import re
 import json

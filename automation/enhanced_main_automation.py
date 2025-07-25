@@ -1,3 +1,20 @@
+"""
+title : Enhanced AutoGluon Release Automation Orchestrator
+
+description : Complete orchestration system for AutoGluon Deep Learning Container release automation,
+managing the full workflow from container updates through infrastructure deployment and
+security scanning. Coordinates the release process steps including container
+configuration updates, ECR image selection, dockerfile generation, PR creation with
+automated security analysis, and post-merge infrastructure deployment.
+Features intelligent workflow management with multiple execution modes: individual steps,
+step combinations, complete automation, and post-PR workflows. Integrates agentic testing
+agents for pip dependency checking, AutoGluon functionality testing, SageMaker integration
+testing, and autonomous security vulnerability analysis and fixing. Handles infrastructure
+deployment automation, release image configuration updates, and Asimov security scanning.
+Provides comprehensive command-line interface for flexible automation execution, from
+individual component testing to complete release workflows.
+"""
+
 import argparse
 import logging
 from updation.steps_1_2_5 import Steps125Automation
@@ -654,6 +671,10 @@ def main():
         print("🔧 Running only step 6...")
         results = automation.run_step_6()
         success = all(results.values())
+    elif args.step_6:
+        print("Running steps 1-6")
+        results=automation.run_automation(steps_only=None)
+        success=all(results.values())
     else:
         # Default: run complete automation
         print("🔧 Running complete automation workflow (default)...")
