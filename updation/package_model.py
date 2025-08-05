@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # Suppress warnings
 warnings.filterwarnings('ignore')
 
-version='1.3.1'
+version='1.4.0'
 
 def run_command(cmd, check=True, timeout=600):
     """Run command with better error handling"""

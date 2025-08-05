@@ -304,7 +304,7 @@ class AsimovSecurityScanAutomation(LoggerMixin):
             if result.returncode != 0:
                 self.logger.error(f"❌ Failed to stage changes")
                 return False
-            commit_message = f"AutoGluon {self.current_version}: Update security scan images\n\nAdding AutoGluon {self.current_version} images for security scanning.\nShifting previous version {self.previous_version} to older position."
+            commit_message = f"Update to support AutoGluon v{self.current_version} and remove support for deprecated versions."
             result = self.run_subprocess_with_logging(
                 ["git", "commit", "-m", commit_message],
                 "Committing changes",

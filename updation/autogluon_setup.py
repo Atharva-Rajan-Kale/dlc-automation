@@ -142,22 +142,22 @@ class Steps125Automation(BaseAutomation, LoggerMixin):
             content = original_content
             content = re.sub(
                 r'build_frameworks\s*=\s*\[.*?\]',
-                'build_frameworks=["autogluon"]',
+                'build_frameworks = ["autogluon"]',
                 content,
                 flags=re.DOTALL
             )
-            self.logger.info("Updated build_frameworks=['autogluon']")
+            self.logger.info("Updated build_frameworks = ['autogluon']")
             
             content = re.sub(
                 r'dlc-pr-autogluon-training\s*=\s*""',
-                'dlc-pr-autogluon-training="autogluon/training/buildspec.yml"',
+                'dlc-pr-autogluon-training = "autogluon/training/buildspec.yml"',
                 content
             )
             self.logger.info("Updated dlc-pr-autogluon-training buildspec path")
             
             content = re.sub(
                 r'dlc-pr-autogluon-inference\s*=\s*""',
-                'dlc-pr-autogluon-inference="autogluon/inference/buildspec.yml"',
+                'dlc-pr-autogluon-inference = "autogluon/inference/buildspec.yml"',
                 content
             )
             self.logger.info("Updated dlc-pr-autogluon-inference buildspec path")

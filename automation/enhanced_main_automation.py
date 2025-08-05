@@ -17,10 +17,10 @@ individual component testing to complete release workflows.
 
 import argparse
 import logging
-from updation.steps_1_2_5 import Steps125Automation
-from updation.steps_3_4 import Steps34Automation  
-from updation.step_6 import Step6Automation
-from release.step_8_infrastructure import Step8InfrastructureAutomation
+from updation.autogluon_setup import Steps125Automation
+from updation.dockerfile_update import Steps34Automation  
+from updation.docker_build import Step6Automation
+from release.dlc_infra_cr import Step8InfrastructureAutomation
 from updation.pip_check_agent import PipCheckAgent
 from testing.sagemaker_test_agent import SageMakerTestAgent
 from testing.security_test_agent import SecurityTestAgent
@@ -541,7 +541,6 @@ class EnhancedAutoGluonReleaseAutomation:
         
         print("="*70)
 
-    # Other methods remain the same...
     def run_automation(self, steps_only=None):
         """Backward compatible method (security testing now automatic with PR creation)"""
         return self.run_automation_with_testing(

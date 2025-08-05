@@ -19,6 +19,7 @@ import shutil
 import boto3
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+import subprocess
 from datetime import datetime
 sys.path.append(str(Path(__file__).parent))
 from automation.common import BaseAutomation, ECRImageSelector
@@ -32,44 +33,99 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
     PRODUCTION_ACCOUNT_ID = '763104351884'
     DEFAULT_REGION = 'us-west-2'  # Updated to use us-west-2 as default
     
-    def __init__(self, current_version: str, previous_version: str, fork_url: str):
+    def __init__(self, current_version: str, previous_version: str, fork_url: str, yaml_only: bool = False):
         super().__init__(current_version, previous_version, fork_url)
         self.training_file = self.repo_dir / "release_images_training.yml"
         self.inference_file = self.repo_dir / "release_images_inference.yml"
         self.available_images_file = self.repo_dir / "available_images.md"
+        
+        # Set branch name based on mode
+        if yaml_only:
+            branch_suffix = "release"
+        else:
+            branch_suffix = "update"
+        
+        self.branch_name = f"{current_version}-{branch_suffix}"
+        
         self.pr_automation = GitHubPRAutomation(
             current_version=current_version,
             fork_url=fork_url,
             repo_dir=self.repo_dir
         )
+        self.pr_automation.branch_name = self.branch_name
         self.original_training_content = None
         self.original_inference_content = None
         self.original_available_images_content = None
         self.setup_logging(current_version,custom_name="autogluon_release")
 
+    def get_github_token(self) -> Optional[str]:
+        """Get GitHub token from environment or GitHub CLI"""
+        token = os.environ.get('GITHUB_TOKEN')
+        if token:
+            return token
+        try:
+            result = self.run_subprocess_with_logging(
+                ["gh", "auth", "token"], 
+                capture_output=True, 
+                text=True, 
+                check=True
+            )
+            return result.stdout.strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            self.logger.warning("Could not get GitHub token from gh CLI")
+            return None
+
+    def configure_git_with_token(self, token: str) -> bool:
+        """Configure Git with GitHub token for authentication"""
+        try:
+            self.run_subprocess_with_logging(
+                ["git", "config", "user.name", "Atharva-Rajan-Kale"], 
+                capture_output=True
+            )
+            self.run_subprocess_with_logging(
+                ["git", "config", "user.email", "atharvakale912@gmail.com"], 
+                capture_output=True
+            )
+            result = self.run_subprocess_with_logging(
+                ["git", "remote", "get-url", "origin"], 
+                capture_output=True, 
+                text=True
+            )
+            current_url = result.stdout.strip()
+            if "@github.com" in current_url and "https://" in current_url:
+                self.logger.info("✅ Git remote already configured with token")
+                return True
+            if current_url.startswith("https://github.com/"):
+                authenticated_url = current_url.replace(
+                    "https://github.com/", 
+                    f"https://{token}@github.com/"
+                )
+                self.run_subprocess_with_logging(
+                    ["git", "remote", "set-url", "origin", authenticated_url], 
+                    check=True
+                )
+                self.logger.info("✅ Configured git remote with GitHub token")
+            else:
+                self.logger.warning(f"⚠️ Unexpected remote URL format: {current_url}")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Failed to configure git with token: {e}")
+            return False
+
     def setup_git_config(self):
         """Setup git configuration for CI environment"""
         try:
-            # Check if git user is already configured
-            result = self.run_subprocess_with_logging(
-                ["git", "config", "user.name"], 
-                capture_output=True, 
-                text=True, 
-                check=False
-            )
-            
-            if not result.stdout.strip():
-                self.logger.info("Setting up git configuration")
-                self.run_subprocess_with_logging([
-                    "git", "config", "user.name", "Atharva-Rajan-Kale"
-                ], check=True)
-                self.run_subprocess_with_logging([
-                    "git", "config", "user.email", "atharvakale912@gmail.com"
-                ], check=True)
-                self.logger.info("✅ Git configuration set")
-            else:
-                self.logger.info(f"Git user already configured: {result.stdout.strip()}")
-            
+            token = self.get_github_token()
+            if not token:
+                self.logger.error("❌ No GitHub token available")
+                return False
+            if not self.configure_git_with_token(token):
+                self.logger.error("❌ Failed to configure git with token")
+                return False
+            self.logger.info("✅ Git configuration and authentication set")
             return True
         except Exception as e:
             self.logger.error(f"❌ Failed to setup git config: {e}")
@@ -80,44 +136,31 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
         self.logger.info("🔧 Setting up repository from fork...")
         original_dir = os.getcwd()
         try:
-            # Create workspace directory if it doesn't exist
             self.workspace_dir.mkdir(exist_ok=True)
             os.chdir(self.workspace_dir)
-            
-            # Remove existing clone if present
             if Path("deep-learning-containers").exists():
                 self.logger.info("Removing existing repository clone...")
                 shutil.rmtree("deep-learning-containers")
-            
-            # Clone repository from fork (defaults to master branch)
             self.logger.info(f"Cloning from {self.fork_url} (master branch)")
             self.run_subprocess_with_logging([
                 "git", "clone", self.fork_url, "deep-learning-containers"
             ], check=True)
             
             os.chdir("deep-learning-containers")
-            
-            # Setup git config
             if not self.setup_git_config():
                 return False
-            
-            # Ensure we're on master branch and pull latest changes
-            self.logger.info("Ensuring we're on master branch and pulling latest changes...")
+            self.logger.info("🔧 Adding upstream remote for clean branch creation...")
             self.run_subprocess_with_logging([
-                "git", "checkout", "master"
+                "git", "remote", "add", "upstream", "https://github.com/aws/deep-learning-containers.git"
             ], check=True)
-            
+            self.logger.info("🔄 Fetching upstream master for clean branch...")
             self.run_subprocess_with_logging([
-                "git", "pull", "origin", "master"
+                "git", "fetch", "upstream", "master"
             ], check=True)
-            self.logger.info("✅ Master branch is up to date")
-            
-            # Create and checkout the release branch from current master
-            branch_name = f"autogluon-{self.current_version}-release"
-            self.logger.info(f"Creating release branch '{branch_name}' from master for pushing changes...")
+            branch_name = self.branch_name
+            self.logger.info(f"Creating clean release branch '{branch_name}' from upstream/master...")
             
             try:
-                # Check if branch already exists locally and delete it
                 result = self.run_subprocess_with_logging([
                     "git", "branch", "--list", branch_name
                 ], capture_output=True, text=True, check=False)
@@ -127,22 +170,18 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
                     self.run_subprocess_with_logging([
                         "git", "branch", "-D", branch_name
                     ], check=True)
-                
-                # Create new branch from current master
                 self.run_subprocess_with_logging([
-                    "git", "checkout", "-b", branch_name
+                    "git", "checkout", "-b", branch_name, "upstream/master"
                 ], check=True)
-                self.logger.info(f"✅ Created and checked out release branch: {branch_name}")
-                self.logger.info(f"📋 This branch will be used for committing and pushing changes")
+                self.logger.info(f"✅ Created clean release branch: {branch_name} from upstream/master")
+                self.logger.info(f"📋 This ensures PR will only show your changes, not fork history")
                 
             except subprocess.CalledProcessError as e:
                 self.logger.error(f"❌ Failed to create release branch: {e}")
                 return False
-            
-            # Update repo_dir to point to the cloned repository
             self.repo_dir = Path.cwd()
             self.logger.info(f"✅ Repository setup complete: {self.repo_dir}")
-            self.logger.info(f"📋 Workflow: Cloned from master → Working on {branch_name} → Will push to {branch_name}")
+            self.logger.info(f"📋 Workflow: Clean branch from upstream/master → Working on {branch_name} → Will push to fork")
             return True
             
         except Exception as e:
@@ -206,12 +245,27 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
                 return False
                 
             commit_message = f"AutoGluon {self.current_version}: Add release images configuration"
+            print(f"🔄 Committing and pushing changes: {commit_message}")
             if not self.commit_and_push_yaml_changes(commit_message):
                 raise Exception("Failed to commit and push YAML changes")
+            print("✅ Changes committed and pushed successfully")
                 
             print("🚀 Creating Pull Request for YAML changes...")
-            if not self.pr_automation.create_pull_request():
-                raise Exception("Failed to create Pull Request")
+            self.logger.info(f"Using branch name: {self.pr_automation.branch_name}")
+            original_dir = os.getcwd()
+            try:
+                os.chdir(self.repo_dir)
+                self.logger.info("🔧 Resetting remote URL for PR automation...")
+                clean_url = self.fork_url
+                self.run_subprocess_with_logging([
+                    "git", "remote", "set-url", "origin", clean_url
+                ], check=True)
+                
+                if not self.pr_automation.create_pull_request():
+                    raise Exception("Failed to create Pull Request")
+                print("✅ Pull Request created successfully")
+            finally:
+                os.chdir(original_dir)
                 
             print("✅ YAML-Only AutoGluon Release Automation completed successfully!")
             print("📋 Summary:")
@@ -284,12 +338,29 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
                 return False
                 
             combined_commit_message = f"AutoGluon {self.current_version}: Revert release images config and update available images documentation"
+            print(f"🔄 Committing and pushing combined changes: {combined_commit_message}")
             if not self.commit_and_push_combined_changes(combined_commit_message):
                 raise Exception("Failed to commit and push combined changes")
+            print("✅ Combined changes committed and pushed successfully")
                 
             print("🚀 Creating Pull Request for combined changes...")
-            if not self.pr_automation.create_pull_request():
-                raise Exception("Failed to create Pull Request")
+            self.logger.info(f"Using branch name: {self.pr_automation.branch_name}")
+            
+            # Reset remote URL to clean version before PR automation to avoid token duplication
+            original_dir = os.getcwd()
+            try:
+                os.chdir(self.repo_dir)
+                self.logger.info("🔧 Resetting remote URL for PR automation...")
+                clean_url = self.fork_url
+                self.run_subprocess_with_logging([
+                    "git", "remote", "set-url", "origin", clean_url
+                ], check=True)
+                
+                if not self.pr_automation.create_pull_request():
+                    raise Exception("Failed to create Pull Request")
+                print("✅ Pull Request created successfully")
+            finally:
+                os.chdir(original_dir)
                 
             print("✅ Revert and Available Images Automation completed successfully!")
             print("📋 Summary:")
@@ -316,8 +387,8 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
             
             self.run_subprocess_with_logging(['git', 'commit', '-m', commit_message], check=True)
             
-            branch_name = f"autogluon-{self.current_version}-release"
-            self.run_subprocess_with_logging(['git', 'push', 'origin', branch_name], check=True)
+            # Use the instance variable
+            self.run_subprocess_with_logging(['git', 'push', 'origin', self.branch_name], check=True)
             self.logger.info(f"✅ Combined changes committed and pushed: {commit_message}")
             return True
         except Exception as e:
@@ -851,10 +922,13 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
         try:
             original_dir = os.getcwd()
             os.chdir(self.repo_dir)
+            
             self.run_subprocess_with_logging(['git', 'add', 'release_images_training.yml', 'release_images_inference.yml'], check=True)
+            
             self.run_subprocess_with_logging(['git', 'commit', '-m', commit_message], check=True)
-            branch_name = f"autogluon-{self.current_version}-release"
-            self.run_subprocess_with_logging(['git', 'push', 'origin', branch_name], check=True)
+            
+            # Use the instance variable
+            self.run_subprocess_with_logging(['git', 'push', 'origin', self.branch_name], check=True)
             self.logger.info(f"✅ YAML changes committed and pushed: {commit_message}")
             return True
         except Exception as e:
@@ -862,6 +936,7 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
             return False
         finally:
             os.chdir(original_dir)
+
             
     def commit_and_push_available_images_changes(self, commit_message: str):
         """Commit and push available_images.md changes to the branch"""
@@ -876,7 +951,7 @@ class AutoGluonReleaseImagesAutomation(BaseAutomation,LoggerMixin):
             self.run_subprocess_with_logging(['git', 'commit', '-m', commit_message], check=True)
             
             # Push changes
-            branch_name = f"autogluon-{self.current_version}-release"
+            branch_name = f"{self.current_version}-release"
             self.run_subprocess_with_logging(['git', 'push', 'origin', branch_name], check=True)
             self.logger.info(f"✅ available_images.md changes committed and pushed: {commit_message}")
             return True
@@ -954,14 +1029,17 @@ def main():
     if args.yaml_only:
         print("🚀 AutoGluon YAML-Only Release Automation")
         print("📋 This will update YAML files and create PR")
+        print(f"📋 Branch name: {args.current_version}-release")
     else:
         print("🚀 AutoGluon Revert + Available Images Automation") 
         print("📋 This will revert YAML files, update available_images.md, and create combined PR")
+        print(f"📋 Branch name: {args.current_version}-update")
         
     automation = AutoGluonReleaseImagesAutomation(
         args.current_version,
         args.previous_version,
-        args.fork_url
+        args.fork_url,
+        yaml_only=args.yaml_only
     )
     success = automation.run_release_images_automation(yaml_only=args.yaml_only)
     exit(0 if success else 1)

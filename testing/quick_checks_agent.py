@@ -343,7 +343,7 @@ class QuickChecksAgent(BaseAutomation,LoggerMixin):
             # This reverses the change made in step 2 of steps_1_2_5.py
             content = re.sub(
                 r'build_frameworks\s*=\s*\["autogluon"\]',
-                'build_frameworks=[]',
+                'build_frameworks = []',
                 content,
                 flags=re.DOTALL
             )
@@ -351,14 +351,14 @@ class QuickChecksAgent(BaseAutomation,LoggerMixin):
             # Also revert the buildspec paths back to empty (if they were changed)
             content = re.sub(
                 r'dlc-pr-autogluon-training\s*=\s*"autogluon/training/buildspec.yml"',
-                'dlc-pr-autogluon-training=""',
+                'dlc-pr-autogluon-training = ""',
                 content
             )
             self.logger.info("✅ Reverted dlc-pr-autogluon-training buildspec path")
             
             content = re.sub(
                 r'dlc-pr-autogluon-inference\s*=\s*"autogluon/inference/buildspec.yml"',
-                'dlc-pr-autogluon-inference=""',
+                'dlc-pr-autogluon-inference = ""',
                 content
             )
             self.logger.info("✅ Reverted dlc-pr-autogluon-inference buildspec path")

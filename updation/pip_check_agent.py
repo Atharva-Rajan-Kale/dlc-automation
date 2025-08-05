@@ -666,7 +666,7 @@ class PipCheckAgent(BaseAutomation,LoggerMixin):
         """Trigger Step 6 rebuild"""
         self.logger.info("🏗️ Triggering rebuild with Step 6...")
         try:
-            from .step_6 import Step6Automation
+            from .docker_build import Step6Automation
             step6 = Step6Automation(self.current_version, self.previous_version, self.fork_url)
             return step6.step6_build_upload_docker()
         except Exception as e:

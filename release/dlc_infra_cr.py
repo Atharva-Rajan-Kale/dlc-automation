@@ -233,7 +233,7 @@ class Step8InfrastructureAutomation(BaseAutomation,LoggerMixin):
         self.logger.info("Committing infrastructure changes...")
         try:
             self.run_subprocess_with_logging(["git", "add", "."], check=True)
-            commit_message = f"AutoGluon {self.current_version}: Update infrastructure deployment config"
+            commit_message = f"Add AutoGluon v{self.current_version}"
             self.run_subprocess_with_logging(["git", "commit", "-m", commit_message], check=True)
             self.logger.info(f"✅ Changes committed locally with message: {commit_message}")
             return True
