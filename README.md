@@ -19,7 +19,7 @@ This automation system consists of several integrated agents working together:
 1. AWS Credentials: Valid AWS credentials with appropriate permissions.
 2. Fork Repository: Fork the main deep-learning-containers repository. Name it as deep-learning-container on your github.
 3. Asimov AWS Credentials: Credentials for Asimov CI/PR testing. Name it in the following way: \
-CODEBUILD_AWS_SECRET_KEY,etc.
+CODEBUILD_AWS_SECRET_KEY,etc. \
 Also define CODEBUILD_REGION='us-west-2'
 4. GitHub Token: Personal access token for repository operations.
 5. Bedrock ARN: For claude access
