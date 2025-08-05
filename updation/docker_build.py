@@ -101,6 +101,11 @@ class Step6Automation(BaseAutomation, LoggerMixin):
 
             if not self.build_docker_images():
                 return False
+            
+            # Revert code changes after successful build
+            if not self.revert_code_changes():
+                self.logger.warning("⚠️ Failed to revert code changes, but continuing...")
+            
             if not self.cleanup_build_artifacts():
                 self.logger.warning("⚠️ Cleanup failed, but continuing...")
 
@@ -175,6 +180,59 @@ class Step6Automation(BaseAutomation, LoggerMixin):
             return True
         except Exception as e:
             self.logger.error(f"❌ Failed to fix code issues: {e}")
+            return False
+
+    def revert_code_changes(self):
+        """Revert the code changes made during the build process"""
+        self.logger.info("🔄 Reverting code changes...")
+        try:
+            patch_helper_path = Path("src/patch_helper.py")
+            if patch_helper_path.exists():
+                with open(patch_helper_path, 'r') as f:
+                    content = f.read()
+
+                if "from constants import PATCHING_INFO_PATH_WITHIN_DLC" in content:
+                    content = content.replace(
+                        "from constants import PATCHING_INFO_PATH_WITHIN_DLC",
+                        "from src.constants import PATCHING_INFO_PATH_WITHIN_DLC"
+                    )
+                    with open(patch_helper_path, 'w') as f:
+                        f.write(content)
+
+                    self.logger.info("✅ Reverted patch_helper.py import")
+                else:
+                    self.logger.info("ℹ️  patch_helper.py import already in original state")
+            else:
+                self.logger.warning("⚠️  patch_helper.py not found")
+            utils_path = Path("src/utils.py")
+            if utils_path.exists():
+                with open(utils_path, 'r') as f:
+                    content = f.read()
+
+                if "_project_root" in content:
+                    lines = content.split('\n')
+                    lines_to_remove = [
+                        "_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))",
+                        "if _project_root not in sys.path:",
+                        "    sys.path.insert(0, _project_root)"
+                    ]
+                    filtered_lines = []
+                    for line in lines:
+                        if line.strip() not in [l.strip() for l in lines_to_remove]:
+                            filtered_lines.append(line)
+
+                    with open(utils_path, 'w') as f:
+                        f.write('\n'.join(filtered_lines))
+
+                    self.logger.info("✅ Reverted utils.py path changes")
+                else:
+                    self.logger.info("ℹ️  utils.py path changes already reverted")
+            else:
+                self.logger.warning("⚠️  utils.py not found")
+
+            return True
+        except Exception as e:
+            self.logger.error(f"❌ Failed to revert code changes: {e}")
             return False
 
     def setup_build_environment(self, account_id: str, region: str):

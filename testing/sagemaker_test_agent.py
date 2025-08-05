@@ -132,7 +132,26 @@ class SageMakerTestAgent(BaseAutomation,LoggerMixin):
         test_dir=self.repo_dir / f"test/sagemaker_tests/autogluon/inference"
         try:
             self.setup_iam_permissions()
+            
+            # Install requirements from deep-learning-containers root directory
+            src_requirements = self.repo_dir / "src" / "requirements.txt"
+            test_requirements = self.repo_dir / "test" / "requirements.txt"
+            
+            if src_requirements.exists():
+                self.logger.info("📦 Installing src requirements...")
+                self.run_subprocess_with_logging(["pip", "install", "-r", str(src_requirements)], check=True)
+            else:
+                self.logger.warning("⚠️ src/requirements.txt not found")
+                
+            if test_requirements.exists():
+                self.logger.info("📦 Installing test requirements...")
+                self.run_subprocess_with_logging(["pip", "install", "-r", str(test_requirements)], check=True)
+            else:
+                self.logger.warning("⚠️ test/requirements.txt not found")
+            
+            # Set up Python path after installing requirements
             os.environ['PYTHONPATH']=str(self.repo_dir / "src")
+            
             account_id=os.environ.get('ACCOUNT_ID')
             region=os.environ.get('REGION', 'us-east-1')
             login_cmd=f"aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {account_id}.dkr.ecr.{region}.amazonaws.com"
@@ -145,6 +164,21 @@ class SageMakerTestAgent(BaseAutomation,LoggerMixin):
         except Exception as e:
             self.logger.error(f"❌ Setup failed:{e}")
             return False
+
+    def cleanup_local_mode_lock(self):
+        """Clean up local_mode_lock file created during test execution"""
+        try:
+            test_dir = self.repo_dir / "test/sagemaker_tests/autogluon/inference"
+            lock_file = test_dir / "resources" / "local_mode_lock"
+            
+            if lock_file.exists():
+                lock_file.unlink()
+                self.logger.info("🧹 Cleaned up local_mode_lock file")
+            else:
+                self.logger.debug("ℹ️ local_mode_lock file not found (already cleaned or not created)")
+                
+        except Exception as e:
+            self.logger.warning(f"⚠️ Failed to clean up local_mode_lock file: {e}")
 
     def run_single_test_suite(self, image_uri: str, container_type: str, test_type: str) -> Tuple[bool, str]:
         """Run a single test suite (local or sagemaker) for a specific image"""
@@ -258,6 +292,8 @@ class SageMakerTestAgent(BaseAutomation,LoggerMixin):
             self.logger.error(f"❌ SageMaker Test Agent failed: {e}")
             return False
         finally:
+            # Clean up the local_mode_lock file after all tests are done
+            self.cleanup_local_mode_lock()
             os.chdir(original_dir)
 
     def print_test_summary(self):
@@ -296,4 +332,4 @@ def main():
     exit(0 if success else 1)
 
 if __name__ == "__main__":
-    main()  
+    main()
