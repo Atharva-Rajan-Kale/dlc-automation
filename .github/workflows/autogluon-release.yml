@@ -22,14 +22,6 @@ on:
         type: choice
         options:
           - 'complete'
-          - 'steps-125'
-          - 'steps-34'
-          - 'step-6'
-          - 'create-pr'
-          - 'infrastructure'
-          - 'release-images'
-          - 'asimov-scan'
-          - 'post-pr-workflow'
         default: 'complete'
       enable_testing:
         description: 'Enable testing agents'
