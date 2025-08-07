@@ -28,7 +28,7 @@ RUN git config --global user.name "Atharva-Rajan-Kale" \
     && git config --global pull.rebase false
 
 # Copy requirements and install Python dependencies
-COPY docker/requirements_agent.txt .
+COPY requirements_agent.txt .
 RUN pip install -r requirements_agent.txt
 
 # Copy automation scripts
