@@ -63,7 +63,7 @@ python3 -m pip install --upgrade pip
 
 ### Install Requirements
 ```shell script
-pip install requirements_agent.txt
+pip install -r requirements_agent.txt
 ```
 ### Complete Workflow Options
 
